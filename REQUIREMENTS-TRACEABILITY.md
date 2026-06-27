@@ -22,7 +22,7 @@
 | 1.2 | Each stage: dedicated agent role, I/O contract, success criteria | ✅ | `SPEC.md §3.1–3.9` (owner + input + output + success per stage); `AGENT_STAGE` map (`engine.py:36`) |
 | 1.3 | Agent roles & responsibilities (inputs / outputs / decision boundaries) | ✅ | `.claude/agents/*.agent.md` (9 agents incl. `e2e-agent`); `SPEC.md §4`; per-role tool lists are least-privilege |
 | 1.4 | Communication protocol: message schema, task contract, state, errors, escalation | ✅ | `SPEC.md §5` + `event.schema.json` (immutable JSONL events); `workflow_state.schema.json` (live state); `CLAUDE.md` "Event log format" |
-| 1.5 | Artifact standards (requirements / tasks / code specs / tests / review reports) | ✅ | `schemas/` (12 JSON Schemas); `SPEC.md §6` artifact table; `CLAUDE.md` required-artifacts table; reference instances in `artifacts/*.example.json` |
+| 1.5 | Artifact standards (requirements / tasks / code specs / tests / review reports) | ✅ | `schemas/` (13 JSON Schemas); the five brief-named formats are **strict-closed** (`additionalProperties: false`); `SPEC.md §6` artifact table + brief §4 checklist; `CLAUDE.md` required-artifacts table; reference instances in `artifacts/*.example.json` |
 | 1.6 | Governance & constraints (guardrails, observability) | ✅ | `SPEC.md §9` (two-tier security baseline, no-secrets, no-deploy-without-QA); `validation.py` `scan_source`; `observability/` dashboard + `events.log.jsonl` |
 
 **Deliverable "Agentic SDLC Specification v1":** `SPEC.md` (authoritative;
