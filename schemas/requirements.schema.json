@@ -30,6 +30,7 @@
         },
         "scope": {
             "type": "object",
+            "additionalProperties": false,
             "required": [
                 "in_scope",
                 "out_of_scope"
@@ -80,5 +81,5 @@
             }
         }
     },
-    "additionalProperties": true
+    "additionalProperties": false
 }

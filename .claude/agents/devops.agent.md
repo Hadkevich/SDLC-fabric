@@ -64,7 +64,11 @@ The container must listen on `0.0.0.0:$PORT`. You set `PORT` at run time and pub
 ## Idempotency
 Before running, remove any prior container for this project so re-runs are clean: `docker rm -f <project-name>` (ignore "no such container"). On success, leave the container running so the URL stays live for review.
 
-## Do not
+## Decision boundaries
+**Can decide:** how to containerize (base image, multi-stage layout, the authored `Dockerfile`); the
+exact `docker run`/deploy command and hardening flags; the `verdict` (`success` / `partial` /
+`failed`) derived from the real health-check result; whether a failed gate stops the deploy.
+**Cannot decide:**
 - Skip gate checks — never deploy without passing QA and review.
 - Modify runtime functionality or source code (you may only add the `Dockerfile`).
 - Use `--network=host`, bind-mount host directories, or drop the hardening flags — you are running generated code.

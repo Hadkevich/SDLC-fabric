@@ -1,9 +1,9 @@
 # Hackathon Requirements — Agent-Driven SDLC & Software Factory
 
 > **Source-of-truth document.** Saved verbatim from the hackathon brief.
-> Every implementation claim in this repo (SDLC-SPEC.md, EVALUATION.md,
-> README.md, code) must be verifiable against the items below.
-> Use this file as the checklist when auditing.
+> Every implementation claim in this repo (SPEC.md, REQUIREMENTS-TRACEABILITY.md,
+> EVALUATION.md, README.md, code) must be verifiable against the items below.
+> Use `REQUIREMENTS-TRACEABILITY.md` as the per-requirement audit (see the Verification Checklist at the bottom).
 
 ---
 
@@ -159,39 +159,20 @@ Make sure the team understands:
 
 ## Verification Checklist
 
-When auditing this repo against the requirements above, map each item to evidence:
+The per-requirement audit for **this** repository lives in
+[`../../REQUIREMENTS-TRACEABILITY.md`](../../REQUIREMENTS-TRACEABILITY.md) — it maps every
+hackathon item above to the exact file/path that satisfies it, with honest ✅/🟡/❌ status.
+Start there, then follow the pointers in [`../../CLAUDE.md`](../../CLAUDE.md):
 
-### Phase 1 — SDLC Spec
-- [x] All 8 lifecycle stages covered → `LIFECYCLE-MAP.md`
-- [x] Each stage has: dedicated agent role / I/O contract / success criteria → `LIFECYCLE-MAP.md`
-- [x] All 7 agent roles defined with inputs/outputs/decision-boundaries → `AGENT-ROLES-MAP.md` (8 roles: 7 brief + bonus challenger)
-- [x] Communication protocol: message schema, task contract, state mgmt, errors, escalation → `COMMUNICATION-PROTOCOL-MAP.md`
-- [x] Artifact standards: requirements (spec-output.md), tasks (stories-output.md), code specs (architect-output.md), test cases (test-output.md + deterministic executor), review reports (review-output.md + security-output.md) → `ARTIFACT-STANDARDS-MAP.md`, `SDLC-SPEC.md §4`
-- [x] Governance: guardrails (DEGRADED circuit breakers, tool restrictions, git isolation, pre-push hooks, hallucination control via `unclear[]` + schema injection) + approval checkpoints (HALT terminal + daily cap, async-only by design) + observability (events.jsonl 13 types incl. `decision_recorded` and `condensation_summary`, transcripts, YAML view) → `GOVERNANCE-MAP.md`, `SDLC-SPEC.md §5`
+- **Agentic SDLC Spec** (lifecycle, agent roles, communication protocol, artifact standards,
+  governance) → [`../../SPEC.md`](../../SPEC.md) (§3 lifecycle · §4 roles · §5 protocol · §6 artifacts · §9 governance)
+- **Architecture diagram** → [`../../ARCHITECTURE-DIAGRAM.md`](../../ARCHITECTURE-DIAGRAM.md)
+- **Agent role definitions** (inputs / outputs / decision boundaries, per role) →
+  [`../../.claude/agents/`](../../.claude/agents/) (9 agents)
+- **Working prototype** → [`../../src/orchestrator/`](../../src/orchestrator/) (deterministic engine) + [`../../tests/`](../../tests/)
+- **Demo project built by the pipeline** → [`../../projects/neural-sync/`](../../projects/neural-sync/)
+- **Evaluation report** → [`../../EVALUATION.md`](../../EVALUATION.md)
 
-### Phase 2 — Workflow Engine
-- [x] Orchestrator (state machine or DAG) implemented → `engine/orchestration/machine.py` (560 LOC) + `routing.py` (340 LOC); pure-data FSM, see `WORKFLOW-ENGINE-MAP.md §2`
-- [x] Structured I/O between agents (not free-form chat) → JSON schemas in `phases/{spec,architect,review,security,e2e}.py`; CLI enforces via `--json-schema`; `WORKFLOW-ENGINE-MAP.md §1`
-- [x] State tracking (event log / shared memory) → event-sourced `events.jsonl` (13 event types) + derived `IterationState` + materialized YAML view; `events.py`, `state.py`
-- [x] Agent runtime, memory layer, tooling layer present → `claude_agent.py` (runtime) + `kb.py` + `events.py` (memory, three layers) + `worktree.py` + phase handlers (tooling); see `WORKFLOW-ENGINE-MAP.md`
-
-### Phase 3 — Demo
-- [x] Non-trivial application built end-to-end → SmolHome (FastAPI backend + Next.js frontend + Telegram bot), 5 autonomous ships → `EVALUATION.md §2`
-- [x] Requirements generated internally → `specifier` agent produces `spec-output.md` per iteration (Phase 1 of pipeline)
-- [x] Architecture by agent → `architect` agent produces `architect-output.md` with file_list/components/data_flow/tech_decisions (MetaGPT WriteDesign pattern); `SDLC-SPEC.md §1` (ARCHITECT phase)
-- [x] Code generated → `developer` agent (opus) — sole code-writer; 5 ships in `EVALUATION.md §2` table
-- [x] Tests created & executed → DEV writes unit + integration, `qa_engineer` writes e2e flows, deterministic TEST phase executes pytest + vitest + tsc in parallel; `EVALUATION.md §2`
-- [x] Automated deployment → DEPLOY phase fast-forward merges → `git push origin main` → Vercel/Render webhook auto-deploy; alternative PR-mode via `gh pr create` (opt-in); `DEVOPS-DIAGRAM.md`
-
-### Success Criteria
-- [x] ≥80% workflow runs without human intervention (measured) → **~95% actual**, see `EVALUATION.md §1` (5 real ships, human touched `orchestrator.py start` only)
-- [x] Artifacts consistent (QA-generated tests pass) → `review-output.md` + `security-output.md` + `e2e-output.md` written every iteration; schemas in `ARTIFACT-STANDARDS-MAP.md`
-- [x] Recovery from ≥2 simulated failures demonstrated → `EVALUATION.md §3` — Case 1 (Ctrl-C crash mid-DEV → resume via event replay), Case 2 (CHALLENGE convergence loop bounded by breaker)
-- [x] Re-run with modified requirements demonstrated → each `--idea` is a new iteration; history preserved in `events.jsonl`; 5 ships in §2 are 5 different ideas
-
-### Final Deliverables
-- [x] SDLC Spec document → `SDLC-SPEC.md` (Phase 1 deliverable — 13 phases, 9 agents, communication protocol, artifact standards, governance)
-- [x] Architecture diagram → `ARCHITECTURE-DIAGRAM.md` (full agent ecosystem: 9 roles + 13-phase FSM + memory layers + Heavy Harness, 3 Mermaid diagrams); DevOps subsystem detail in `DEVOPS-DIAGRAM.md`; prose in `LIFECYCLE-MAP.md` + `WORKFLOW-ENGINE-MAP.md`
-- [x] Working prototype codebase → `engine/` (720 tests passing, see `WORKFLOW-ENGINE-MAP.md §7` verification commands)
-- [x] Demo project built by agents → `demo/wc-lite/` (CLI built by run `imp-2026-05-29-001/002`, recovered from DEV commits, 5/5 tests pass) + SmolHome ships in `EVALUATION.md §2`; iteration artifacts under `_bmad/pipeline/runs/imp-*`
-- [x] Evaluation report → `EVALUATION.md`
+> The previous inline checklist was removed: it described a different/sibling implementation
+> (`engine/orchestration/`, `phases/*.py`, `SmolHome`, `wc-lite`, `*-MAP.md` docs) that does not
+> exist in this repo. `REQUIREMENTS-TRACEABILITY.md` is the authoritative, repo-accurate audit.

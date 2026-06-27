@@ -105,6 +105,15 @@ the final `monitoring_feedback` stage is owned by the Orchestrator.
 - **E2E Agent** — validates the deployed solution in a real browser via the Playwright MCP server; emits a pass/fail verdict over the acceptance criteria.
 - **Orchestrator Agent** — manages state transitions, retries, and escalation; owns no stage content.
 
+**Mapping to the brief's role list.** The hackathon brief lists seven example roles and assigns
+"breaks work into tasks" to the **Product Agent**. This spec splits that responsibility for cleaner
+separation of concerns: the **Product Agent** normalizes the request into requirements, and a
+dedicated **Planner Agent** decomposes those requirements into the dependency-ordered task DAG.
+Together, Product + Planner cover the brief's Product role. The remaining six brief roles map 1:1
+(Architect, Developer, Reviewer, QA, DevOps, Orchestrator); **E2E** is an additional role beyond the
+brief. All nine roles are wired into the engine via `AGENT_STAGE` (`src/orchestrator/engine.py`) and
+dispatched by name through `claude --agent <name>` (`src/orchestrator/runners.py`).
+
 **Model strategy (cost ↔ capability).** Models are assigned per role, not globally:
 `architect` and `reviewer` run on **opus** (hardest reasoning; the reviewer is deliberately
 a *different and stronger* model than the `developer` to break the echo chamber);
@@ -126,6 +135,22 @@ All agent interactions are recorded as immutable JSON events appended to `events
 Live workflow status is held in `workflow_state.json`: each stage has a `status` ∈
 {`pending`, `in_progress`, `success`, `failure`, `blocked`, `skipped`} and an `attempt` counter.
 
+**Protocol elements (brief §3 checklist).** All five required elements are specified here and
+mechanically enforced in `src/orchestrator/engine.py` — agents never "chat"; they exchange
+validated artifacts and immutable events:
+- **Message schema** — the event envelope above (`schemas/event.schema.json`). Every inter-agent
+  signal is one schema-validated JSON event appended to `events.log.jsonl`, never free-form chat.
+- **Task contract format** — the per-task object in `workplan.json` (`schemas/workplan.schema.json`):
+  `task_id`, `title`, `owner_agent`, `inputs[]`, `outputs[]`, `depends_on[]`, `done_criteria[]`.
+  This is the unit of work an agent is dispatched on (§6, §8.5).
+- **State management** — event log (`events.log.jsonl`, append-only, immutable) **plus**
+  `workflow_state.json` (live per-stage/per-task status). The event log is authoritative; state is
+  reconstructable by folding it (§8.1). No shared mutable memory between agents.
+- **Error handling & retries** — failures are classified recoverable / reworkable / unrecoverable,
+  with capped retry + bounded rework + circuit breaker (§8.3, §9).
+- **Escalation rules** — three mandatory human checkpoints and a `HALT` kill switch (§8.6), plus
+  escalate-on-exhaustion and escalate-on-unsafe-request (§9).
+
 ## 6. Artifact Standards
 All artifacts must be parseable, versioned (`"spec_version": "v1"`), and schema-validated against
 `schemas/` before the next stage runs. Where a `.json`/`.md` pair exists, the **JSON is authoritative**.
@@ -145,6 +170,19 @@ All artifacts must be parseable, versioned (`"spec_version": "v1"`), and schema-
 | `e2e_report.json` | E2E | `schemas/e2e_report.schema.json` |
 | `workflow_state.json` | Orchestrator | `schemas/workflow_state.schema.json` |
 | `events.log.jsonl` | all (append-only) | `schemas/event.schema.json` |
+
+**Brief §4 checklist (the five required strict formats).** Every artifact type the brief calls out
+has a strict, **closed** schema (`additionalProperties: false` — unknown fields are rejected):
+- **Requirements docs** → `requirements.schema.json` (problem_statement, scope, acceptance_criteria, …)
+- **Task definitions** → the per-task object in `workplan.schema.json` (`task_id`, `owner_agent`,
+  `inputs`, `outputs`, `depends_on`, `done_criteria`)
+- **Code specs** → `code_spec.schema.json` (`files_affected[]` with `change_type` enum, contracts_satisfied)
+- **Test cases** → the `test_cases[]` objects in `test_plan.schema.json` (given/when/then,
+  `status` enum, `maps_to_requirement` traceability back to acceptance criteria)
+- **Review reports** → `review_report.schema.json` (`verdict` enum + categorized `Issue` objects)
+
+All five are validated mechanically (`src/orchestrator/validation.py`) before the stage gate
+advances — a vague or malformed artifact is a recoverable failure, never a silent pass (§8.2).
 
 ## 7. Stage Gates
 A stage advances only when the gate below passes (enforced before the next stage runs):
@@ -238,6 +276,20 @@ load state → pick next runnable task(s) from the DAG
   exhaustion or an unsafe request escalates to a human.
 - An optional run-level cost ceiling (`max_cost_usd`) trips a breaker that halts new
   dispatch once cumulative agent spend (folded from the event log) reaches it.
+
+**Observability (logs, traces, decisions).** Every decision an agent or the orchestrator makes is
+auditable after the fact — the brief's second governance pillar:
+- `events.log.jsonl` — append-only, immutable trace of every transition (`success` / `retry` /
+  `blocked`), each stamped by the orchestrator with `event_id` + `timestamp` and carrying the
+  `blocking_issues`, `retry_count`, and `summary` that explain *why* flow moved (§5, §8.4). The
+  whole run state is reconstructable by folding this log.
+- `workflow_state.json` — live per-stage and per-task status (incl. `awaiting_approval`, `halted`),
+  so a human can see exactly where the pipeline is and why it paused.
+- Per-event `metrics` (`input_tokens`, `output_tokens`, `cost_usd`, `duration_ms`) make resource
+  spend traceable and feed the cost breaker above.
+- A zero-dependency live dashboard (`observability/`) renders the pipeline (colored by status), the
+  event timeline, and a per-agent drill-down of files produced/consumed — read straight from the two
+  files above, no agent changes required.
 
 ## 10. Success Criteria
 - At least 80% of workflow runs complete without human intervention.

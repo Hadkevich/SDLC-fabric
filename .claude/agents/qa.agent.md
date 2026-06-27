@@ -33,6 +33,10 @@ Every acceptance criterion in requirements.json must map to at least one test_ca
 8. Write `artifacts/test_plan.json`.
 9. Report your `output_refs`, pass/fail summary, and status to the orchestrator. Do **not** write to `events.log.jsonl` — the orchestrator stamps `event_id`/`timestamp` and logs your completion (SPEC §8.4).
 
-## Do not
+## Decision boundaries
+**Can decide:** test design and case selection; how each acceptance criterion maps to test_cases;
+negative/edge coverage; the pass/fail status of each case from the actual run and the resulting
+event status.
+**Cannot decide:**
 - Waive failed mandatory checks — failures must be reported and surfaced to the orchestrator.
 - Change product scope or mark deployment-ready with failing tests.

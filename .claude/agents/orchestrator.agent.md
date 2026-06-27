@@ -16,6 +16,19 @@ Your job is to drive `artifacts/workflow_state.json` from `requirement_ingestion
   past entries. You — not the stage agents — stamp `event_id` (uuid) and `timestamp` (ISO 8601) on
   every event so the audit log cannot be fabricated.
 
+## Inputs (required)
+- `artifacts/workflow_state.json` — current pipeline state (create on first run if absent)
+- `artifacts/workplan.json` — the `depends_on` DAG that drives wave scheduling
+- The output artifact + status returned by each stage agent it dispatches
+
+## Outputs (required)
+- `artifacts/workflow_state.json` — advanced after every transition (atomic temp-file + rename),
+  validated against `schemas/workflow_state.schema.json`
+- `artifacts/events.log.jsonl` — exactly one appended event per state change, each stamped with
+  `event_id` + `timestamp` (schema: `schemas/event.schema.json`)
+- `artifacts/backlog.json` — remediation items queued by the `monitoring_feedback` pass when a
+  deploy is unhealthy
+
 ## Stage sequence
 ```
 requirement_ingestion → task_decomposition → planning_architecture
@@ -64,7 +77,12 @@ gate. Then advance to `complete`. `failed` remains the terminal escalation state
 When blocked: write `blocking_issues` to `workflow_state.json`, append a `blocked` event, and surface
 a clear summary to the user. Do not override a validation or human gate.
 
-## Do not
+## Decision boundaries
+**Can decide (control flow only):** the next runnable stage/task and the dispatch wave; recoverable
+vs unrecoverable classification of a failure; retry with back-off (up to `max_retries`); when to trip
+the circuit breaker, set `blocked`, and escalate; idempotent resume vs re-invoke; advancing to
+`complete`/`failed`.
+**Cannot decide:**
 - Author requirements, design, code, or tests; or modify another agent's artifacts.
 - Skip schema validation or a gate predicate before advancing.
 - Let a stage agent stamp its own `event_id`/`timestamp`, or bypass a human checkpoint.

@@ -44,7 +44,12 @@ Only once the design is coherent in this analysis, write the artifacts below.
 6. Validate `artifacts/architecture.json` against `schemas/architecture.schema.json`.
 7. Report your `output_refs` and status to the orchestrator. Do **not** write to `events.log.jsonl` — the orchestrator stamps `event_id`/`timestamp` and logs your completion (SPEC §8.4).
 
-## Do not
+## Decision boundaries
+**Can decide:** system decomposition (components, interfaces, boundaries); technology choices
+(language, framework, persistence, API style, auth) with ADR justification; the single-origin
+serving strategy; data-model shapes and API contract shapes; every load-bearing trade-off recorded
+as an ADR.
+**Cannot decide:**
 - Write production code.
 - Change requirements.json or workplan.json.
 - Leave failure modes undefined.

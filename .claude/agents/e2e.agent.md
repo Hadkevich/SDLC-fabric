@@ -46,7 +46,12 @@ with `status: "skip"` and a note.
    **not** write to `events.log.jsonl` — the orchestrator stamps `event_id`/`timestamp`
    and logs your completion (SPEC §8.4).
 
-## Do not
+## Decision boundaries
+**Can decide:** which user journeys/scenarios to exercise and how they map to acceptance criteria;
+the per-scenario `status` (pass/fail/skip) after de-flaking; the overall `verdict` (`passed` /
+`passed_with_warnings` / `failed`). A repeatable `failed` is a binding gate that reworks the
+developer subtree once.
+**Cannot decide:**
 - Navigate to any origin other than the deployed `url` (no external sites). (SPEC §9)
 - Capture secrets, tokens, or PII into screenshots or scenario text. (SPEC §9)
 - Modify source code, tests, the Dockerfile, or the deployment.
