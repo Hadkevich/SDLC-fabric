@@ -84,3 +84,23 @@ The agentic loop diagram is at `workflow/mermaid.md`. All agents should use it a
 
 ## Event log format
 Every agent appends one JSONL event on completion. Fields: event_id (uuid), workflow_id, stage, agent, status (success|failure|blocked|retry), input_refs[], output_refs[], summary, blocking_issues[], retry_count, timestamp (ISO 8601).
+
+## Two execution engines (same agents, same gates)
+The agents, schemas, and gate predicates above are shared by **two** orchestration
+runtimes (see `SPEC.md §11`):
+
+1. **File-state engine** — `python -m orchestrator` (`src/orchestrator/engine.py`):
+   single process, one `workflow_state.json` + `events.log.jsonl` per project,
+   thread-pool DAG scheduling. The layout/tables above describe this engine.
+2. **DB-backed, multi-pipeline engine** — `python -m watcher`
+   (`src/sdlcdb/` + `src/watcher/`): inter-agent JSON artifacts live in a SQLite DB
+   (the source of truth) instead of files; project **code** still lands on disk
+   under `projects/<name>/`. A **watcher** polls the DB and dispatches agent workers
+   under a global N-per-role limit; a deterministic **router** applies the same
+   gates and grows the task table; an **evaluator-agent** (the only LLM on the
+   failure path) diagnoses an `error` and emits a healing prompt that re-injects the
+   failed subtree (bounded by a heal cap, then dead-letter). Several pipelines run
+   concurrently. The event log is the source of truth; live status is a projection.
+
+When working in `src/sdlcdb/` or `src/watcher/`, target engine #2; everything else
+(agents, `schemas/`, gates) is shared.

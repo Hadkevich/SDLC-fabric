@@ -184,6 +184,7 @@ const STAGES = [
   ["code_review",            "reviewer-agent"],
   ["testing_validation",     "qa-agent"],
   ["deployment",             "devops-agent"],
+  ["e2e_validation",         "e2e-agent"],
   ["monitoring_feedback",    "orchestrator-agent"],
 ];
 // Fallback list only; the dropdown is normally auto-discovered from projects/
@@ -208,11 +209,28 @@ async function discoverProjects(){
 // ---- helpers ------------------------------------------------------------
 const $ = id => document.getElementById(id);
 const qp = new URLSearchParams(location.search);
-function projectName(){ return $("project").value || qp.get("project") || KNOWN_PROJECTS[0]; }
+// A selected value of "db:<pipeline_id>" means the DB-backed engine (read via the
+// exported observability/db/<pid>.json snapshot); anything else is a file project.
+function selValue(){ return $("project").value || qp.get("project") || KNOWN_PROJECTS[0]; }
+function isDb(){ return String(selValue()).startsWith("db:"); }
+function dbId(){ return String(selValue()).slice(3); }
+function projectName(){ return isDb() ? (lastState?.project_name || dbId()) : selValue(); }
 function base(){ return `../projects/${projectName()}/artifacts`; }
 function esc(s){ return String(s??"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 function projHref(ref){ return `../projects/${projectName()}/${ref.replace(/^projects\/[^/]+\//,"")}`; }
 function hhmm(ts){ const m=/T(\d{2}:\d{2})/.exec(ts||""); return m?m[1]:"--:--"; }
+
+// Discover DB-backed pipelines from the exported snapshot index (best-effort).
+async function discoverDbPipelines(){
+  try{
+    const r = await fetch("db/index.json?_=" + Date.now(), {cache:"no-store"});
+    if(!r.ok) return [];
+    return (await r.json()).map(p => ({
+      value:"db:"+p.pipeline_id,
+      label:`${p.name||p.pipeline_id.slice(0,8)} · db (${p.status})`,
+    }));
+  }catch(e){ return []; }
+}
 
 // ---- metric formatting --------------------------------------------------
 function fmtTokens(n){
@@ -319,6 +337,12 @@ function renderTimeline(events){
 // ---- render: detail (what happened under the agent) --------------------
 function fileList(refs, kind){
   if(!refs || !refs.length) return `<div class="meta">none</div>`;
+  // In DB mode, JSON artifacts live in the database (not on disk) — show plain
+  // names; only on-disk code files would be linkable, so we skip links entirely.
+  if(isDb()){
+    return `<ul class="files ${kind}">` + refs.map(r=>
+      `<li><span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--muted)">${esc(r)}</span></li>`).join("") + `</ul>`;
+  }
   return `<ul class="files ${kind}">` + refs.map(r=>
     `<li><a href="${esc(projHref(r))}" target="_blank">${esc(r)}</a></li>`).join("") + `</ul>`;
 }
@@ -452,16 +476,23 @@ function renderHeader(state){
 // ---- poll loop ----------------------------------------------------------
 async function tick(){
   try{
-    const [events, state] = await Promise.all([
-      getJSONL(base()+"/events.log.jsonl").catch(()=>[]),
-      getJSON(base()+"/workflow_state.json").catch(()=>null),
-    ]);
+    let events, state;
+    if(isDb()){
+      // DB-backed engine: one exported snapshot carries both state + events.
+      const snap = await getJSON(`db/${encodeURIComponent(dbId())}.json`);
+      state = snap.state; events = snap.events || [];
+    }else{
+      [events, state] = await Promise.all([
+        getJSONL(base()+"/events.log.jsonl").catch(()=>[]),
+        getJSON(base()+"/workflow_state.json").catch(()=>null),
+      ]);
+    }
     lastEvents = events; lastState = state;
     $("err").innerHTML = "";
     renderHeader(state);
     renderAll();
-    // live agent activity for the active task (best-effort; absent for replay/old runs)
-    const tid = activeTaskId(state);
+    // live agent activity for the active task (file engine only; DB mode has no trace)
+    const tid = isDb() ? null : activeTaskId(state);
     let steps = [];
     if(tid){ try{ steps = await getJSONL(base()+"/agent-trace/"+encodeURIComponent(tid)+".jsonl"); }catch{ steps=[]; } }
     renderActivity(tid, steps, state);
@@ -483,9 +514,14 @@ async function tick(){
 (async function init(){
   const sel = $("project");
   const initial = qp.get("project");
-  const discovered = await discoverProjects();
-  const opts = [...new Set([...(initial?[initial]:[]), ...discovered, ...KNOWN_PROJECTS])];
-  opts.forEach(p=>{ const o=document.createElement("option"); o.value=o.textContent=p; sel.appendChild(o); });
+  const [discovered, dbPipelines] = await Promise.all([discoverProjects(), discoverDbPipelines()]);
+  // file projects first, then DB-backed pipelines (value "db:<pid>")
+  const fileOpts = [...new Set([...(initial && !initial.startsWith("db:")?[initial]:[]),
+                                ...discovered, ...KNOWN_PROJECTS])]
+                   .map(p=>({value:p, label:p}));
+  [...fileOpts, ...dbPipelines].forEach(o=>{
+    const el=document.createElement("option"); el.value=o.value; el.textContent=o.label; sel.appendChild(el);
+  });
   if(initial) sel.value = initial;
   sel.onchange = ()=>{ lastEvents=[]; lastState=null; window.sel=null; tick(); };
   tick();

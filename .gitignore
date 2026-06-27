@@ -12,6 +12,10 @@ __pycache__/
 **/venv/
 # Live per-task agent activity traces are scratch, not source:
 projects/*/artifacts/agent-trace/
+# DB-backed engine: the SQLite store and exported dashboard snapshots are runtime:
+artifacts.db
+artifacts.db-*
+observability/db/
 
 # Secrets — commit only .env.example, never real env files:
 **/.env

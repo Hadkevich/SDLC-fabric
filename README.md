@@ -37,6 +37,8 @@ An agent-native SDLC that delivers software projects end-to-end using role-speci
 schemas/                 # JSON Schema definitions for every artifact
 artifacts/               # Reference instances (*.example.json) validated by the test suite
 src/orchestrator/        # Deterministic engine: state machine, schema gates, DAG scheduling, retries, event log
+src/sdlcdb/              # DB-backed control plane: SQLite store (tasks / artifacts / events), atomic claim
+src/watcher/             # Watcher poll loop + file-on-edge worker + CLI (multi-pipeline engine)
 observability/           # Zero-dependency live dashboard (reads workflow_state.json + events.log.jsonl)
 projects/<name>/         # Self-contained projects; per-project artifacts/ holds run state + events.log.jsonl
 tests/                   # Schema validation + orchestrator engine tests
@@ -107,8 +109,66 @@ Monitor progress live with the dashboard:
 ./observability/serve.sh <project-name>
 ```
 
+## DB-backed, multi-pipeline engine (`src/sdlcdb` + `src/watcher`)
+
+A second engine runs the same agents and gates but stores all inter-agent JSON
+artifacts in a **SQLite DB** (the source of truth) instead of files, and drives
+**many pipelines concurrently** off one shared tasks table. Project *code* files
+still land on disk under `projects/<name>/`. Three roles:
+
+- **Watcher** (`src/watcher/watcher.py`) — polls the DB every few seconds: routes
+  new terminal events, then dispatches runnable tasks to agent workers up to a
+  **global N-per-role** ceiling, and requeues any worker whose lease expired.
+- **Orchestrator / router** (`src/orchestrator/orchestrator.py`) — deterministic:
+  on each completed task it applies the stage gate (review / deploy / e2e), grows
+  the pipeline (product → planner → expand the workplan DAG), runs the bounded
+  developer **rework** loop on a rejected review / failed e2e, or dead-letters.
+- **Evaluator** (`src/orchestrator/evaluator.py`, `evaluator-agent`) — the only LLM
+  on the failure path: diagnoses an `error`, writes a **healing prompt**, and the
+  router re-injects the failed subtree (skip-unchanged), bounded by a heal cap.
+
+Workers (`src/watcher/worker.py`) are the **file-on-edge adapter**: they materialize
+a task's input artifacts from the DB into temp files, run the agent unchanged,
+validate its JSON outputs against `schemas/`, ingest them back into the DB, and
+delete the local JSON (code stays on disk).
+
+```bash
+# Submit a pipeline (creates a tasks-table row; --yes auto-approves human gates):
+PYTHONPATH=src python3 -m watcher submit --prompt "Build a CLI todo app" --name todo --yes
+
+# Run the watcher loop (polls every --tick s; --idle-exit stops when there's no work):
+PYTHONPATH=src python3 -m watcher run --developers 3 --tick 5
+
+# Approve a human checkpoint so a paused pipeline resumes:
+PYTHONPATH=src python3 -m watcher approve <pipeline_id> architecture
+
+# Inspect state (add --json for CI / observability):
+PYTHONPATH=src python3 -m watcher status [<pipeline_id>] [--json]
+
+# Export dashboard snapshots (writes observability/db/index.json + <pid>.json):
+PYTHONPATH=src python3 -m watcher export
+```
+
+All state lives in one `artifacts.db` (override with `--db`). The DB is the source
+of truth; the live event log folds back into a status projection
+(`Database.fold_state`), so a crash never silently loses progress.
+
+The **dashboard** (`./observability/serve.sh`) shows DB pipelines too: run
+`python -m watcher export` (alongside the watcher, e.g. on a `watch` loop) to
+refresh `observability/db/`, and the page lists each pipeline as `<name> · db`
+next to the file projects.
+
+> The two engines are complementary: `python -m orchestrator` is the original
+> single-process, file-state engine; `python -m watcher` is the DB-backed,
+> multi-pipeline engine. They share the agents, schemas, and gate logic.
+
 ## Tests
 
 ```bash
-python3 -m pytest tests/          # schema validation + orchestrator engine (incl. fault injection)
+python3 -m pytest tests/          # schema validation + both engines (incl. fault injection)
 ```
+
+Coverage spans schema validation (`test_schemas.py`), the original engine
+(`test_orchestrator.py`), and the DB-backed engine: the store (`test_db.py`), the
+file-on-edge worker (`test_worker.py`), the router/evaluator (`test_router.py`),
+and the watcher loop incl. multi-pipeline + the global N ceiling (`test_watcher.py`).
