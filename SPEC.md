@@ -245,3 +245,46 @@ load state → pick next runnable task(s) from the DAG
 - Code passes QA-generated tests.
 - The system recovers from at least two simulated failures via retry/escalation.
 - The workflow can be rerun with modified requirements.
+
+## 11. Alternative execution model: DB-backed, multi-pipeline engine
+Sections §3–§9 define the lifecycle, artifacts, and gates. They are realized by
+**two** orchestration runtimes that share the agents (`.claude/agents/`), the
+schemas (`schemas/`), and the gate predicates. The original **file-state engine**
+(§8, `src/orchestrator/engine.py`, `python -m orchestrator`) drives one project
+through a single process with a `workflow_state.json` file. This section specifies
+the **DB-backed, multi-pipeline engine** (`src/sdlcdb/` + `src/watcher/`,
+`python -m watcher`), which runs the *same contract* but for many pipelines at once.
+
+**11.1 Source of truth.** Inter-agent JSON artifacts and the all-tasks table live in
+a SQLite database (WAL), not files. Project **code** files still land on disk under
+`projects/<name>/`. The append-only `events` table is the source of truth; live
+status is a projection foldable from it (`Database.fold_state`). The DB layer is
+isolated in `src/sdlcdb/db.py` so a swap to Postgres stays localized.
+
+**11.2 Components.**
+- **Watcher** (`src/watcher/watcher.py`) — a poll loop (every 5–10s): requeues
+  expired worker leases, routes new terminal events through the router, then
+  dispatches runnable `pending` tasks to agent workers up to a **global N-per-role**
+  ceiling across all pipelines (`submit` enforces `max_pipelines`).
+- **Worker** (`src/watcher/worker.py`) — the *file-on-edge adapter*: materializes a
+  task's input artifacts from the DB to temp files, runs the owning agent unchanged,
+  validates its declared JSON outputs against `schemas/`, ingests them back into the
+  DB, and removes the local JSON (code stays on disk). One attempt per run;
+  recoverable failure under the retry cap re-queues, otherwise the task errors.
+- **Router** (`src/orchestrator/orchestrator.py`) — invoked per terminal event;
+  deterministic. On success it applies the §7 stage gate (review / deploy / e2e),
+  grows the pipeline (product → planner → expand the workplan DAG), or runs the
+  bounded developer **rework** loop (§3.5/§8.3); on an unrecoverable gate it
+  dead-letters. Happy-path routing uses no LLM.
+- **Evaluator** (`src/orchestrator/evaluator.py`, `evaluator-agent`) — the only LLM
+  on the failure path. On a task `error` it diagnoses the root cause and emits a
+  **healing prompt**; the router re-injects the failed subtree (with the fingerprint
+  skip-unchanged optimization), bounded by a heal cap, then dead-letters.
+
+**11.3 Preserved contract.** Schema validation per handoff, the §7 gate predicates,
+the three §8.6 human checkpoints (modeled as `awaiting_approval` task rows released
+by an operator `approve`), retry/rework/heal caps, and the immutable event log are
+all preserved — only the topology (central DAG scheduler → DB task table + polling
+watcher) and the storage (files → SQLite) differ. Determinism is kept: the DB's
+`now`/`new_id` seams are injectable, and the router/gates are pure over artifact
+content, so the engine is testable without an LLM.
