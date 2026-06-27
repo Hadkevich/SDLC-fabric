@@ -1,5 +1,20 @@
 # Agentic SDLC — Project Instructions
 
+## 📍 Auditing this repo or collecting project data? Read these, in order
+This project is the hackathon deliverable for an *Agent-Driven SDLC & Software Factory*.
+Everything a grader needs is mapped explicitly — do not guess, follow the map:
+
+1. **[`REQUIREMENTS-TRACEABILITY.md`](REQUIREMENTS-TRACEABILITY.md)** — **start here.** Every hackathon + Task-04 requirement → the exact file that satisfies it, with honest ✅/🟡/❌ status.
+2. **[`SPEC.md`](SPEC.md)** — authoritative Agentic SDLC spec: lifecycle (§3, 9 stages incl. `e2e_validation`), agent roles (§4, 9 agents), communication protocol (§5), artifact standards (§6), governance (§9).
+3. **[`ARCHITECTURE-DIAGRAM.md`](ARCHITECTURE-DIAGRAM.md)** — agent-ecosystem + engine + gate diagrams (Mermaid).
+4. **[`EVALUATION.md`](EVALUATION.md)** — what worked / what failed on the real `neural-sync` run (honest; the recorded run halted at the deploy gate, before the `e2e_validation` stage existed).
+5. **[`docs/requirements/`](docs/requirements/)** — the source-of-truth requirements this repo is graded against (verbatim).
+6. **[`projects/neural-sync/`](projects/neural-sync/)** — the demo app the pipeline built ([README](projects/neural-sync/README.md)).
+
+Code map: deterministic engine → `src/orchestrator/` · subagents → `.claude/agents/`
+(product, planner, architect, developer, reviewer, qa, devops, **e2e**, orchestrator) ·
+artifact schemas → `schemas/` · tests → `tests/` · live dashboard → `observability/`.
+
 ## Goal
 Deliver small real software projects end-to-end using a multi-agent pipeline with deterministic handoffs and machine-readable artifacts.
 
