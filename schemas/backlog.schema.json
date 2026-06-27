@@ -1,0 +1,32 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Backlog",
+    "description": "Remediation items emitted by the monitoring_feedback stage. The feedback loop's durable signal: each unhealthy deploy (or exhausted rework) appends an open item here; a follow-up feedback cycle's product agent folds open items into updated requirements, and the orchestrator marks them resolved (deploy became healthy) or escalated (loop exhausted) as it converges.",
+    "type": "array",
+    "items": {
+        "type": "object",
+        "required": ["id", "source", "issues", "status", "created_at"],
+        "additionalProperties": false,
+        "properties": {
+            "id": { "type": "string" },
+            "source": {
+                "type": "string",
+                "enum": ["monitoring_feedback"]
+            },
+            "workflow_id": { "type": "string" },
+            "feedback_cycle": { "type": "integer", "minimum": 0 },
+            "release_verdict": { "type": "string" },
+            "issues": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string" }
+            },
+            "status": {
+                "type": "string",
+                "enum": ["open", "resolved", "escalated"]
+            },
+            "created_at": { "type": "string", "format": "date-time" },
+            "resolved_at": { "type": "string", "format": "date-time" }
+        }
+    }
+}

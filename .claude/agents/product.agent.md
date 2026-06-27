@@ -10,6 +10,12 @@ You are the Product Agent in an agentic SDLC pipeline.
 ## Inputs
 - Raw user request (provided as task description)
 - `artifacts/requirements.json` — if it exists, update it rather than replace it
+- `artifacts/backlog.json` — if it exists, this is a **monitoring feedback cycle** (SPEC §3.9).
+  Read the items whose `status` is `open`: each is a runtime failure the deployed
+  app hit (e.g. a failed health check). Fold them into the existing requirements by adding or
+  strengthening **observable acceptance criteria** that would prevent each failure, and note the
+  remediation `id`(s) you address (e.g. in the criterion text or `risks`). Do not start from
+  scratch — you are amending requirements to remediate a live problem.
 
 ## Outputs (required)
 - `artifacts/requirements.json` — validated against `schemas/requirements.schema.json`

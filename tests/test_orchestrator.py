@@ -701,3 +701,194 @@ def test_atomic_state_is_valid_against_schema(tmp_path):
     schema = json.loads((Path(__file__).resolve().parents[1] / "schemas"
                          / "workflow_state.schema.json").read_text())
     jsonschema.Draft202012Validator(schema).validate(state)
+
+
+# ---------------------------------------------- monitoring_feedback loop (SPEC §3.9)
+
+def make_health_rework_runner(project: Path, *, unhealthy_rounds=1):
+    """A writer runner whose devops emits an UNHEALTHY release_report for the first
+    ``unhealthy_rounds`` deploys then a healthy one. Tracks developer/deploy counts so
+    tests can assert the post-deploy health rework re-ran the developer subtree."""
+    counts = {"dev": 0, "deploy": 0}
+
+    def fn(task, project_root):
+        if task["owner_agent"] == "developer-agent":
+            counts["dev"] += 1
+        for rel in task["outputs"]:
+            p = project / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if p.name == "release_report.json":
+                counts["deploy"] += 1
+                rep = _valid_artifact("release_report.json")
+                if counts["deploy"] <= unhealthy_rounds:
+                    rep["verdict"] = "partial"
+                    rep["health_checks"] = [{"name": "GET /", "status": "fail"}]
+                p.write_text(json.dumps(rep))
+            elif rel.endswith(".json"):
+                name = "code_spec.json" if "/code_spec/" in ("/" + rel) else p.name
+                p.write_text(json.dumps(_valid_artifact(name)))
+            else:
+                p.write_text("// code\n")
+    return CallableRunner(fn), counts
+
+
+def make_prelude_health_runner(project: Path, *, unhealthy_deploys=2):
+    """A full prompt→complete runner (product/planner/DAG, like make_prelude_runner)
+    whose devops emits an UNHEALTHY release_report for the first ``unhealthy_deploys``
+    deploys then a healthy one — so a cross-run feedback cycle (re-plan) is needed to
+    converge. Tracks product/dev/deploy counts across cycles."""
+    counts = {"product": 0, "dev": 0, "deploy": 0}
+
+    def fn(task, project_root):
+        agent = task["owner_agent"]
+        if agent == "product-agent":
+            counts["product"] += 1
+        if agent == "developer-agent":
+            counts["dev"] += 1
+        for rel in task["outputs"]:
+            p = project / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            name = p.name
+            if name == "requirements.json":
+                p.write_text(json.dumps(_valid_requirements()))
+            elif name == "requirements.md":
+                p.write_text("# requirements\n")
+            elif name == "workplan.json":
+                p.write_text(json.dumps({"spec_version": "v1", "workflow_id": "wf-test",
+                                         "tasks": PLANNED_TASKS}))
+            elif name == "architecture.json":
+                p.write_text(json.dumps(_valid_architecture()))
+            elif name == "api-contracts.json":
+                p.write_text(json.dumps({"openapi": "3.1.0",
+                                         "info": {"title": "t", "version": "1"}, "paths": {}}))
+            elif name == "data-model.json":
+                p.write_text(json.dumps({"entities": [
+                    {"name": "E", "fields": [{"name": "id", "type": "UUID"}]}]}))
+            elif name == "release_report.json":
+                counts["deploy"] += 1
+                rep = _valid_artifact("release_report.json")
+                if counts["deploy"] <= unhealthy_deploys:
+                    rep["verdict"] = "partial"
+                    rep["health_checks"] = [{"name": "GET /", "status": "fail"}]
+                p.write_text(json.dumps(rep))
+            elif name.endswith(".json"):
+                p.write_text(json.dumps(_valid_artifact(name)))
+            else:
+                p.write_text("// code\n")
+    return CallableRunner(fn), counts
+
+
+def test_health_rework_remediates_unhealthy_deploy(tmp_path):
+    """Level 1: an unhealthy deploy drives a bounded in-run health rework (re-dispatch
+    the developer subtree → re-deploy → re-monitor); once healthy, the run completes and
+    the backlog item is resolved."""
+    _write_workplan(tmp_path)
+    runner, counts = make_health_rework_runner(tmp_path, unhealthy_rounds=1)
+    state = _orch(tmp_path, runner, max_feedback_cycles=1).run()
+    assert state["current_stage"] == "complete"
+    assert state["health_rework"] == 1
+    assert counts["dev"] == 2       # original + one health rework round
+    assert counts["deploy"] == 2    # original + re-deploy
+    backlog = json.loads((tmp_path / "artifacts/backlog.json").read_text())
+    assert backlog and all(b["status"] == "resolved" for b in backlog)
+
+
+def test_health_rework_escalates_when_unfixable_without_replan(tmp_path):
+    """Level 1 cap (STAGE_REWORK_CAP['monitoring_feedback']=1): a persistently unhealthy
+    DAG-only deploy reworks once, and — with no product agent to re-plan with — escalates,
+    queueing the failure to backlog.json as 'escalated'."""
+    _write_workplan(tmp_path)
+    runner, counts = make_health_rework_runner(tmp_path, unhealthy_rounds=99)
+    state = _orch(tmp_path, runner, max_feedback_cycles=1).run()
+    assert state["current_stage"] == "failed"
+    assert state["health_rework"] == 1
+    assert counts["dev"] == 2       # original + exactly one rework round, then escalate
+    backlog = json.loads((tmp_path / "artifacts/backlog.json").read_text())
+    assert backlog and all(b["status"] == "escalated" for b in backlog)
+
+
+def test_feedback_cycle_replans_to_remediate(tmp_path):
+    """Level 2: when an in-run health rework doesn't fix the deploy, a cross-run feedback
+    cycle re-runs the product agent (folding backlog.json into updated requirements) and
+    the whole pipeline; once healthy the loop closes and the backlog resolves."""
+    runner, counts = make_prelude_health_runner(tmp_path, unhealthy_deploys=2)
+    # deploy#1 unhealthy → health rework → deploy#2 unhealthy → re-plan cycle 1 → deploy#3 healthy
+    state = _orch(tmp_path, runner, max_feedback_cycles=1).run_from_prompt("build a thing")
+    assert state["current_stage"] == "complete"
+    assert state["feedback_cycle"] == 1
+    assert counts["product"] >= 2    # product re-ran for the feedback cycle
+    assert counts["deploy"] == 3
+    # both remediation levels ran — recorded in the event log (the audit source of truth)
+    mon = [e["summary"] for e in _events(tmp_path) if e["stage"] == "monitoring_feedback"]
+    assert any("health rework" in s for s in mon)
+    assert any("feedback cycle" in s for s in mon)
+    backlog = json.loads((tmp_path / "artifacts/backlog.json").read_text())
+    assert backlog and all(b["status"] == "resolved" for b in backlog)
+    # the final multi-cycle state still validates against the (extended) schema
+    import jsonschema
+    schema = json.loads((Path(__file__).resolve().parents[1] / "schemas"
+                         / "workflow_state.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(state)
+
+
+def test_feedback_loop_escalates_after_cycle_cap(tmp_path):
+    """Level 2 cap: a deploy that never becomes healthy exhausts the in-run rework and the
+    bounded re-plan cycles, then escalates — the backlog items end 'escalated' and the run
+    fails."""
+    runner, counts = make_prelude_health_runner(tmp_path, unhealthy_deploys=99)
+    state = _orch(tmp_path, runner, max_feedback_cycles=1).run_from_prompt("build a thing")
+    assert state["current_stage"] == "failed"
+    assert state["feedback_cycle"] == 1
+    backlog = json.loads((tmp_path / "artifacts/backlog.json").read_text())
+    assert backlog and all(b["status"] == "escalated" for b in backlog)
+    mon = [e for e in _events(tmp_path) if e["stage"] == "monitoring_feedback"]
+    assert mon[-1]["status"] == "blocked"
+
+
+def test_feedback_loop_honours_production_deploy_gate(tmp_path):
+    """Each deploy in the loop — including a health-rework re-deploy — passes through the
+    production_deploy checkpoint. With the gate un-approved the loop cannot deploy; granting
+    it lets the same loop deploy → detect unhealthy → rework → re-deploy → complete."""
+    _write_workplan(tmp_path)
+    # gate closed → pauses at the first deployment (before any monitoring/rework)
+    paused = _orch(tmp_path, make_health_rework_runner(tmp_path)[0],
+                   auto_approve=False, approvals={"requirements", "architecture"},
+                   max_feedback_cycles=1).run()
+    assert paused["current_stage"] == "deployment"
+    assert paused["tasks"]["T-OPS"]["status"] == "awaiting_approval"
+    # gate granted → resume: deploy (unhealthy) → health rework → re-deploy (gated again,
+    # now approved) → healthy → complete
+    runner, counts = make_health_rework_runner(tmp_path, unhealthy_rounds=1)
+    done = _orch(tmp_path, runner, auto_approve=False,
+                 approvals={"requirements", "architecture", "production_deploy"},
+                 max_feedback_cycles=1).run()
+    assert done["current_stage"] == "complete"
+    assert done["health_rework"] == 1
+    assert counts["deploy"] == 2     # the post-rework re-deploy went through the gate
+
+
+def test_produced_backlog_validates_against_schema(tmp_path):
+    """The backlog.json the engine writes is itself schema-valid (backlog.schema.json) —
+    the monitoring_feedback signal is a first-class, validated artifact, not loose JSON."""
+    import jsonschema
+    _write_workplan(tmp_path)
+    runner, _ = make_health_rework_runner(tmp_path, unhealthy_rounds=99)
+    _orch(tmp_path, runner, max_feedback_cycles=1).run()
+    backlog = json.loads((tmp_path / "artifacts/backlog.json").read_text())
+    schema = json.loads((Path(__file__).resolve().parents[1] / "schemas"
+                         / "backlog.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(backlog)
+
+
+def test_feedback_loop_disabled_by_default_is_signal_only(tmp_path):
+    """Back-compat: with the loop disabled (default max_feedback_cycles=0) an unhealthy
+    deploy never reworks — it queues a single open backlog signal and the run still
+    completes (the deploy gate already owned go/no-go)."""
+    _write_workplan(tmp_path)
+    runner, counts = make_health_rework_runner(tmp_path, unhealthy_rounds=99)
+    state = _orch(tmp_path, runner).run()      # max_feedback_cycles defaults to 0
+    assert state["current_stage"] == "complete"
+    assert state.get("health_rework", 0) == 0
+    assert counts["deploy"] == 1               # no re-deploy attempted
+    backlog = json.loads((tmp_path / "artifacts/backlog.json").read_text())
+    assert backlog and backlog[0]["status"] == "open"

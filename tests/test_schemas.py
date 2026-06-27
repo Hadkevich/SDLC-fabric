@@ -92,3 +92,30 @@ def test_e2e_report_schema_rejects_scenario_without_status():
         "verdict": "passed", "validated_at": "2026-01-01T00:00:00Z",
     }
     assert list(Draft202012Validator(schema).iter_errors(bad))
+
+
+# Stage-8 feedback loop (SPEC §3.9): backlog.json is now a schema-governed artifact.
+
+def test_backlog_schema_is_valid_schema():
+    Draft202012Validator.check_schema(load("schemas/backlog.schema.json"))
+
+
+def test_backlog_schema_accepts_a_remediation_item():
+    schema = load("schemas/backlog.schema.json")
+    good = [{
+        "id": "REMEDIATION-1", "source": "monitoring_feedback",
+        "workflow_id": "wf-test", "feedback_cycle": 0, "release_verdict": "partial",
+        "issues": ["health check failed: GET /"], "status": "open",
+        "created_at": "2026-01-01T00:00:00Z",
+    }]
+    errors = list(Draft202012Validator(schema).iter_errors(good))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_backlog_schema_rejects_unknown_status():
+    schema = load("schemas/backlog.schema.json")
+    bad = [{  # status not in the enum
+        "id": "REMEDIATION-1", "source": "monitoring_feedback",
+        "issues": ["x"], "status": "wishlist", "created_at": "2026-01-01T00:00:00Z",
+    }]
+    assert list(Draft202012Validator(schema).iter_errors(bad))

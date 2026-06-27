@@ -28,6 +28,7 @@ SCHEMA_BY_NAME = {
     "release_report.json": "release_report.schema.json",
     "e2e_report.json": "e2e_report.schema.json",
     "workflow_state.json": "workflow_state.schema.json",
+    "backlog.json": "backlog.schema.json",
 }
 
 _VALIDATOR_CACHE: dict = {}

@@ -61,6 +61,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-cost-usd", type=float, default=None,
                    help="run-level cost ceiling in USD; the breaker halts new "
                         "dispatch once cumulative agent cost reaches it (default: none)")
+    p.add_argument("--feedback-loop", type=int, default=0, metavar="N",
+                   help="enable the monitoring_feedback loop (SPEC §3.9): an unhealthy "
+                        "deploy drives a Level-1 in-run health rework, then up to N "
+                        "Level-2 cross-run re-plans (product folds backlog.json into "
+                        "updated requirements), then escalates. 0 (default) keeps the "
+                        "one-shot signal. Each re-deploy still honours the "
+                        "production_deploy checkpoint — pass --approve "
+                        "requirements,architecture (not production_deploy) to keep the "
+                        "loop automatic but gate every deploy, or --yes for full auto.")
     p.add_argument("--json", action="store_true",
                    help="print the final workflow_state as JSON to stdout (for CI / "
                         "machine consumption) instead of the human summary")
@@ -82,6 +91,23 @@ def _print_summary(state: dict, project: Path) -> None:
     print(f"\n{icon}  workflow {state.get('workflow_id', '?')} → {stage}")
     print(f"   artifacts: {project / 'artifacts'}")
     print(f"   events:    {project / 'artifacts' / 'events.log.jsonl'}")
+
+    # Monitoring feedback loop (SPEC §3.9): summarise backlog status + re-plan cycles.
+    # The round-by-round detail lives in events.log.jsonl (the audit source of truth).
+    backlog_path = project / "artifacts" / "backlog.json"
+    if backlog_path.exists():
+        try:
+            items = json.loads(backlog_path.read_text())
+            counts: dict = {}
+            for e in items if isinstance(items, list) else []:
+                counts[e.get("status")] = counts.get(e.get("status"), 0) + 1
+            if counts:
+                summary = ", ".join(f"{n} {s}" for s, n in counts.items())
+                cyc = (f", {state['feedback_cycle']} re-plan cycle(s)"
+                       if state.get("feedback_cycle") else "")
+                print(f"   backlog:   {backlog_path}  ({summary}{cyc})")
+        except (json.JSONDecodeError, OSError):
+            pass
 
     tasks = state.get("tasks", {})
     if tasks:
@@ -152,6 +178,7 @@ def main(argv=None) -> int:
         max_rework=args.max_rework,
         max_parallel=args.max_parallel,
         max_cost_usd=args.max_cost_usd,
+        max_feedback_cycles=args.feedback_loop,
     )
 
     state_file = project / "artifacts" / "workflow_state.json"
