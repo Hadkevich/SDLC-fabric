@@ -270,7 +270,7 @@ async def get_developer(
         raise HTTPException(status_code=404, detail=f"Developer {developer_id} not found")
 
     # Developers can only view their own profile
-    if current_user.role == "developer" and current_user.user_id != str(developer_id):
+    if current_user.role == "developer" and current_user.developer_profile_id != str(developer_id):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     return _profile_to_response(dev)
@@ -288,7 +288,7 @@ async def update_developer(
     if dev is None:
         raise HTTPException(status_code=404, detail=f"Developer {developer_id} not found")
 
-    if current_user.role == "developer" and current_user.user_id != str(developer_id):
+    if current_user.role == "developer" and current_user.developer_profile_id != str(developer_id):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     dev.skills = payload.skills
@@ -341,7 +341,7 @@ async def delete_developer(
     Returns HTTP 204 on success; subsequent GET /developers/{id} returns 404.
     """
     # Only the developer themselves or a manager may request erasure
-    if current_user.role == "developer" and current_user.user_id != str(developer_id):
+    if current_user.role == "developer" and current_user.developer_profile_id != str(developer_id):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     dev = await db.get(DeveloperProfile, developer_id)

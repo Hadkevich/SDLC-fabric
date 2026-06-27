@@ -21,8 +21,10 @@ import { login, logout, setAccessToken } from './api/client';
 import { DeveloperDashboard } from './pages/DeveloperDashboard';
 import { ManagerDashboard } from './pages/ManagerDashboard';
 import { WeightConfigPage } from './pages/WeightConfigPage';
+import { ProfilePage } from './pages/ProfilePage';
 
-type ManagerTab = 'risk' | 'weights';
+type ManagerTab = 'risk' | 'weights' | 'profile';
+type DeveloperTab = 'recommendations' | 'profile';
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
 
@@ -151,120 +153,13 @@ function LoginForm({ onSuccess }: LoginFormProps) {
   );
 }
 
-// ─── Manager team selector ─────────────────────────────────────────────────────
-
-interface TeamSelectorProps {
-  onSelect: (teamId: string) => void;
-}
-
-function TeamSelector({ onSelect }: TeamSelectorProps) {
-  const [input, setInput] = useState('');
-
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    const trimmed = input.trim();
-    if (trimmed) onSelect(trimmed);
-  };
-
-  return (
-    <div style={{ padding: '48px 24px', maxWidth: '480px', margin: '0 auto' }}>
-      <h2 style={{ margin: '0 0 8px', fontWeight: 700, color: '#111827', fontSize: '1.1rem' }}>
-        Select Team
-      </h2>
-      <p style={{ margin: '0 0 16px', color: '#6b7280', fontSize: '0.875rem' }}>
-        Enter a team UUID to view its risk dashboard.
-      </p>
-      <form
-        onSubmit={handleSubmit}
-        style={{ display: 'flex', gap: '8px' }}
-      >
-        <input
-          type="text"
-          placeholder="Team UUID (e.g. 3fa85f64-…)"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          required
-          style={{ ...inputStyle, flex: 1 }}
-        />
-        <button
-          type="submit"
-          style={{
-            padding: '9px 16px',
-            backgroundColor: '#1d4ed8',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontWeight: 700,
-            fontSize: '0.875rem',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          Load
-        </button>
-      </form>
-    </div>
-  );
-}
-
-// ─── Nav bar ───────────────────────────────────────────────────────────────────
-
-interface NavBarProps {
-  role: 'developer' | 'manager';
-  onLogout: () => void;
-  /** Manager only: called when the user wants to switch teams. */
-  onSwitchTeam?: () => void;
-}
-
-function NavBar({ role, onLogout, onSwitchTeam }: NavBarProps) {
-  const navStyle: CSSProperties = {
-    backgroundColor: '#1d4ed8',
-    padding: '12px 24px',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
-  };
-
-  const outlineBtn: CSSProperties = {
-    color: '#bfdbfe',
-    background: 'none',
-    border: '1px solid #93c5fd',
-    borderRadius: '6px',
-    padding: '4px 12px',
-    cursor: 'pointer',
-    fontSize: '0.8rem',
-    fontWeight: 600,
-  };
-
-  return (
-    <nav style={navStyle}>
-      <span style={{ color: '#ffffff', fontWeight: 800, fontSize: '0.95rem', letterSpacing: '0.05em' }}>
-        NEURAL SYNC
-      </span>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <span style={{ color: '#93c5fd', fontSize: '0.8rem', fontWeight: 600 }}>
-          {role === 'manager' ? '⚙ Manager' : '👤 Developer'}
-        </span>
-        {role === 'manager' && onSwitchTeam && (
-          <button onClick={onSwitchTeam} style={outlineBtn}>
-            Switch Team
-          </button>
-        )}
-        <button onClick={onLogout} style={outlineBtn}>
-          Sign Out
-        </button>
-      </div>
-    </nav>
-  );
-}
-
 // ─── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [session, setSession] = useState<LoginResponse | null>(null);
   const [teamId] = useState<string>('00000000-0000-0000-0000-000000000001');
   const [managerTab, setManagerTab] = useState<ManagerTab>('risk');
+  const [developerTab, setDeveloperTab] = useState<DeveloperTab>('recommendations');
 
   const handleLoginSuccess = (resp: LoginResponse) => {
     setSession(resp);
@@ -279,6 +174,7 @@ export default function App() {
     setAccessToken(null);
     setSession(null);
     setManagerTab('risk');
+    setDeveloperTab('recommendations');
   };
 
   // ── Unauthenticated → show login form ──
@@ -286,13 +182,59 @@ export default function App() {
     return <LoginForm onSuccess={handleLoginSuccess} />;
   }
 
-  // ── Developer role → Developer Dashboard (AC7) ──
+  // ── Developer role → tabbed view: Recommendations | Profile ──
+  const devTabBtn = (active: boolean): CSSProperties => ({
+    padding: '4px 14px',
+    backgroundColor: active ? '#ffffff' : 'transparent',
+    color: active ? '#1d4ed8' : '#bfdbfe',
+    border: active ? '1px solid #93c5fd' : '1px solid transparent',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '0.8rem',
+    fontWeight: 600,
+  });
+
   if (session.role === 'developer') {
     const devId = session.developer_profile_id ?? session.user_id;
     return (
       <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb' }}>
-        <NavBar role="developer" onLogout={() => void handleLogout()} />
-        <DeveloperDashboard developerId={devId} />
+        <nav
+          style={{
+            backgroundColor: '#1d4ed8',
+            padding: '10px 24px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+          }}
+        >
+          <span style={{ color: '#ffffff', fontWeight: 800, fontSize: '0.95rem', letterSpacing: '0.05em' }}>
+            NEURAL SYNC
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button onClick={() => setDeveloperTab('recommendations')} style={devTabBtn(developerTab === 'recommendations')}>
+              Recommendations
+            </button>
+            <button onClick={() => setDeveloperTab('profile')} style={devTabBtn(developerTab === 'profile')}>
+              My Profile
+            </button>
+            <span style={{ color: '#93c5fd', fontSize: '0.8rem', fontWeight: 600, marginLeft: '8px' }}>
+              👤 Developer
+            </span>
+            <button
+              onClick={() => void handleLogout()}
+              style={{ color: '#bfdbfe', background: 'none', border: '1px solid #93c5fd', borderRadius: '6px', padding: '4px 12px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+            >
+              Sign Out
+            </button>
+          </div>
+        </nav>
+
+        {developerTab === 'recommendations' ? (
+          <DeveloperDashboard developerId={devId} />
+        ) : (
+          <ProfilePage role="developer" developerId={devId} userId={session.user_id} />
+        )}
       </div>
     );
   }
@@ -332,6 +274,9 @@ export default function App() {
           <button onClick={() => setManagerTab('weights')} style={tabBtnStyle(managerTab === 'weights')}>
             Weight Config
           </button>
+          <button onClick={() => setManagerTab('profile')} style={tabBtnStyle(managerTab === 'profile')}>
+            My Profile
+          </button>
           <span style={{ color: '#93c5fd', fontSize: '0.8rem', fontWeight: 600, marginLeft: '8px' }}>
             ⚙ Manager
           </span>
@@ -353,11 +298,9 @@ export default function App() {
         </div>
       </nav>
 
-      {managerTab === 'risk' ? (
-        <ManagerDashboard teamId={teamId} />
-      ) : (
-        <WeightConfigPage />
-      )}
+      {managerTab === 'risk' && <ManagerDashboard teamId={teamId} />}
+      {managerTab === 'weights' && <WeightConfigPage />}
+      {managerTab === 'profile' && <ProfilePage role="manager" userId={session.user_id} />}
     </div>
   );
 }

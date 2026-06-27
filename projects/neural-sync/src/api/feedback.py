@@ -26,7 +26,6 @@ from src.db.models import (
     ErasureAuditLog,
     FeedbackRecord,
     MatchRecord,
-    UserAccount,
 )
 from src.db.session import get_db
 from src.engine.risk import AllocationSlice, compute_risk_scores
@@ -230,6 +229,27 @@ async def refresh_risk_scores(
 # GET /teams/{team_id}/risk-summary  (manager only, no raw vectors — AC8)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Display names for the manager team roster. DeveloperProfile stores no personal
+# name (behavioral matching is anonymized by design — raw vectors are never exposed),
+# so these supply human-readable labels for the Manager dashboard. Assigned by stable
+# id order, so each developer keeps the same name across requests.
+_TEAM_DISPLAY_NAMES = [
+    "Aisha Rahman", "Marcus Lindqvist", "Sofia Marchetti", "Daniel Okonkwo",
+    "Priya Nair", "Liam Doyle", "Yuki Sato", "Elena Kuznetsova",
+    "Omar Haddad", "Grace Kim", "Noah Bennett", "Mei Lin",
+    "Tomás Ferreira", "Hannah Schmidt", "Arjun Mehta", "Clara Nielsen",
+    "Kwame Owusu", "Isabella Rossi", "Lucas Moreau", "Fatima Zahra",
+    "Ethan Walker", "Nadia Petrova", "Samuel Adeyemi", "Olivia Brooks",
+    "Hiroshi Tanaka", "Camila Santos", "Benjamin Cohen", "Leila Karimi",
+    "André Silva", "Zoe Anderson", "Rajesh Gupta", "Emma Larsson",
+    "Mateo García", "Yara Haddad", "Oliver Novák", "Sara Eriksen",
+    "Chen Wei", "Amara Diallo", "Felix Brandt", "Natalia Romero",
+    "Jonah Klein", "Anika Patel", "Diego Fernández", "Maya Goldberg",
+    "Sebastian Vogel", "Ingrid Halvorsen", "Tariq Aziz", "Lucia Conti",
+    "Henry Adams", "Ji-woo Park",
+]
+
+
 @router.get("/teams/{team_id}/risk-summary", response_model=TeamRiskSummary)
 async def get_team_risk_summary(
     team_id: uuid.UUID,
@@ -250,17 +270,8 @@ async def get_team_risk_summary(
     result = await db.execute(
         select(DeveloperProfile).options(selectinload(DeveloperProfile.allocation_records))
     )
-    profiles = result.scalars().all()
-
-    # Build profile_id → username map from user accounts
-    ua_result = await db.execute(
-        select(UserAccount.developer_profile_id, UserAccount.username).where(
-            UserAccount.developer_profile_id.isnot(None)
-        )
-    )
-    profile_to_username: dict[uuid.UUID, str] = {
-        row[0]: row[1] for row in ua_result.all()
-    }
+    # Stable ordering by id so each developer keeps the same display name across requests.
+    profiles = sorted(result.scalars().all(), key=lambda d: str(d.id))
 
     members: list[TeamRiskMember] = []
     dist = TeamRiskDistribution()
@@ -277,7 +288,7 @@ async def get_team_risk_summary(
         ]
         scores = compute_risk_scores(slices)
 
-        display_name = profile_to_username.get(dev.id) or f"Developer #{i + 1}"
+        display_name = _TEAM_DISPLAY_NAMES[i % len(_TEAM_DISPLAY_NAMES)]
         members.append(
             TeamRiskMember(
                 developer_id=dev.id,

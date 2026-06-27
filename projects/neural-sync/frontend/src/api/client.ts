@@ -84,6 +84,26 @@ export interface DeveloperMatchesResponse {
   total: number;
 }
 
+/**
+ * Operator profile (Identity Layer §2.1). Raw work_style / motivation vectors
+ * are intentionally NOT part of this response — they are modeled internally and
+ * never exposed via the API.
+ */
+export interface DeveloperProfile {
+  id: string;
+  skills: string[];
+  experience_years: number;
+  preferred_stack: string[];
+  timezone: string;
+  availability_hours: number;
+  career_goals: string[];
+  project_history: unknown[];
+  is_self_reported: boolean;
+  embedding_status: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export type RiskBadgeLevel = 'low' | 'medium' | 'high';
 
 /** Per ADR-002 / AC8: raw behavioral vectors are never in this response. */
@@ -362,6 +382,13 @@ export async function submitFeedback(payload: FeedbackRequest): Promise<Feedback
  */
 export async function getDeveloperRisk(developerId: string): Promise<RiskResponse> {
   return request<RiskResponse>(`/developers/${developerId}/risk`);
+}
+
+// ─── Operator profile (Identity Layer §2.1) ───────────────────────────────────
+
+/** GET /developers/{developer_id} — the authenticated developer's own profile. */
+export async function getDeveloperProfile(developerId: string): Promise<DeveloperProfile> {
+  return request<DeveloperProfile>(`/developers/${developerId}`);
 }
 
 // ─── Weight config (Admin tab — manager only) ─────────────────────────────────
