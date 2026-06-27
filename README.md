@@ -112,11 +112,19 @@ PYTHONPATH=src python3 -m watcher approve <pipeline_id> architecture
 
 # Inspect state (add --json for CI / observability):
 PYTHONPATH=src python3 -m watcher status [<pipeline_id>] [--json]
+
+# Export dashboard snapshots (writes observability/db/index.json + <pid>.json):
+PYTHONPATH=src python3 -m watcher export
 ```
 
 All state lives in one `artifacts.db` (override with `--db`). The DB is the source
 of truth; the live event log folds back into a status projection
 (`Database.fold_state`), so a crash never silently loses progress.
+
+The **dashboard** (`./observability/serve.sh`) shows DB pipelines too: run
+`python -m watcher export` (alongside the watcher, e.g. on a `watch` loop) to
+refresh `observability/db/`, and the page lists each pipeline as `<name> · db`
+next to the file projects.
 
 > The two engines are complementary: `python -m orchestrator` is the original
 > single-process, file-state engine; `python -m watcher` is the DB-backed,

@@ -341,6 +341,13 @@ class Database:
                 (*TERMINAL_EVENT_STATUSES, limit)).fetchall()
         return [self._event_row(r) for r in rows]
 
+    def list_events(self, pipeline_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM events WHERE pipeline_id=? ORDER BY timestamp",
+                (pipeline_id,)).fetchall()
+        return [self._event_row(r) for r in rows]
+
     def mark_event_processed(self, event_id: str) -> None:
         with self._lock:
             self._conn.execute(

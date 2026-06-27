@@ -68,6 +68,10 @@ def _build_parser() -> argparse.ArgumentParser:
     st.add_argument("pipeline_id", nargs="?")
     st.add_argument("--json", action="store_true",
                     help="emit machine-readable JSON (for CI / observability)")
+
+    e = sub.add_parser("export", help="write JSON snapshots for the dashboard")
+    e.add_argument("--out", default=str(REPO_ROOT / "observability" / "db"),
+                   help="output directory (default: observability/db/)")
     return p
 
 
@@ -132,12 +136,19 @@ def _cmd_status(db, args) -> int:
     return 0
 
 
+def _cmd_export(db, args) -> int:
+    from .export import export_all
+    n = export_all(db, args.out)
+    print(f"exported {n} pipeline(s) -> {args.out}")
+    return 0
+
+
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
     db = Database(args.db)
     try:
-        return {"submit": _cmd_submit, "run": _cmd_run,
-                "approve": _cmd_approve, "status": _cmd_status}[args.cmd](db, args)
+        return {"submit": _cmd_submit, "run": _cmd_run, "approve": _cmd_approve,
+                "status": _cmd_status, "export": _cmd_export}[args.cmd](db, args)
     finally:
         db.close()
 
