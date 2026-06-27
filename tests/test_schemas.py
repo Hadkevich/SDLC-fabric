@@ -20,6 +20,7 @@ CASES = [
     ("artifacts/test_plan.example.json", "schemas/test_plan.schema.json"),
     ("artifacts/review_report.example.json", "schemas/review_report.schema.json"),
     ("artifacts/release_report.example.json", "schemas/release_report.schema.json"),
+    ("artifacts/e2e_report.example.json", "schemas/e2e_report.schema.json"),
 ]
 
 
@@ -75,4 +76,19 @@ def test_api_contracts_schema_rejects_non_openapi():
 def test_data_model_schema_rejects_untyped_fields():
     schema = load("schemas/data-model.schema.json")
     bad = {"entities": [{"name": "User", "fields": [{"name": "id"}]}]}  # field has no type
+    assert list(Draft202012Validator(schema).iter_errors(bad))
+
+
+def test_e2e_report_schema_is_valid_schema():
+    Draft202012Validator.check_schema(load("schemas/e2e_report.schema.json"))
+
+
+def test_e2e_report_schema_rejects_scenario_without_status():
+    schema = load("schemas/e2e_report.schema.json")
+    bad = {  # scenario is missing the required "status"
+        "spec_version": "v1", "workflow_id": "wf", "base_url": "http://localhost:8080",
+        "scenarios": [{"scenario_id": "E2E-1", "name": "loads"}],
+        "summary": {"total": 1, "passed": 0, "failed": 0, "skipped": 1},
+        "verdict": "passed", "validated_at": "2026-01-01T00:00:00Z",
+    }
     assert list(Draft202012Validator(schema).iter_errors(bad))

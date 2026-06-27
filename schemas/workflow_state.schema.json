@@ -17,6 +17,7 @@
                 "code_review",
                 "testing_validation",
                 "deployment",
+                "e2e_validation",
                 "monitoring_feedback",
                 "complete",
                 "failed"

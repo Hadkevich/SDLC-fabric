@@ -36,6 +36,11 @@ DEFAULT_TASKS = [
     _task("T-OPS", "devops-agent", ["artifacts/release_report.json"], ["T-REV"]),
 ]
 
+# Adds the post-deploy e2e_validation stage (a UI project). T-E2E depends on devops.
+E2E_TASKS = DEFAULT_TASKS + [
+    _task("T-E2E", "e2e-agent", ["artifacts/e2e_report.json"], ["T-OPS"]),
+]
+
 
 def _write_workplan(project: Path, tasks=DEFAULT_TASKS):
     (project / "artifacts").mkdir(parents=True, exist_ok=True)
@@ -61,8 +66,18 @@ def _valid_artifact(name, verdict="approved", failed=0):
                 "reviewed_at": "2026-01-01T00:00:00Z"}
     if name == "release_report.json":
         return {"spec_version": "v1", "workflow_id": "wf-test", "environment": "local",
-                "artifact_ref": "build", "verdict": "success", "deployed_at": "2026-01-01T00:00:00Z",
+                "artifact_ref": "build", "url": "http://localhost:8080",
+                "verdict": "success", "deployed_at": "2026-01-01T00:00:00Z",
                 "health_checks": [{"name": "GET /", "status": "pass"}]}
+    if name == "e2e_report.json":
+        return {"spec_version": "v1", "workflow_id": "wf-test",
+                "base_url": "http://localhost:8080",
+                "scenarios": [{"scenario_id": "E2E-1", "name": "loads",
+                               "status": "fail" if failed else "pass"}],
+                "summary": {"total": 1, "passed": 0 if failed else 1,
+                            "failed": failed, "skipped": 0},
+                "verdict": "failed" if failed else "passed",
+                "validated_at": "2026-01-01T00:00:00Z"}
     raise ValueError(name)
 
 
@@ -96,6 +111,29 @@ def make_rework_runner(project: Path, *, reject_rounds=1):
                 counts["review"] += 1
                 v = "rejected" if counts["review"] <= reject_rounds else "approved"
                 path.write_text(json.dumps(_valid_artifact("review_report.json", verdict=v)))
+            elif rel.endswith(".json"):
+                path.write_text(json.dumps(_valid_artifact(path.name)))
+            else:
+                path.write_text("// code\n")
+    return CallableRunner(fn), counts
+
+
+def make_e2e_rework_runner(project: Path, *, fail_rounds=1):
+    """A writer runner whose e2e_report fails the first ``fail_rounds`` validations
+    then passes. Tracks developer/e2e invocation counts so tests can assert the
+    post-deploy e2e failure re-ran the developer subtree (bounded at one round)."""
+    counts = {"dev": 0, "e2e": 0}
+
+    def fn(task, project_root):
+        if task["owner_agent"] == "developer-agent":
+            counts["dev"] += 1
+        for rel in task["outputs"]:
+            path = project / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.name == "e2e_report.json":
+                counts["e2e"] += 1
+                fail = 1 if counts["e2e"] <= fail_rounds else 0
+                path.write_text(json.dumps(_valid_artifact("e2e_report.json", failed=fail)))
             elif rel.endswith(".json"):
                 path.write_text(json.dumps(_valid_artifact(path.name)))
             else:
@@ -201,6 +239,44 @@ def test_review_gate_catches_rejection_before_qa_and_deploy(tmp_path):
     assert state["tasks"]["T-REV"]["status"] == "blocked"
     assert state["tasks"]["T-OPS"]["status"] == "pending"   # deploy never ran
     assert counts["dev"] == 1                                # no rework attempted
+
+
+def test_e2e_stage_reaches_complete(tmp_path):
+    """The post-deploy e2e_validation stage runs as a normal DAG task: a passing
+    e2e_report lets the run reach complete."""
+    _write_workplan(tmp_path, E2E_TASKS)
+    state = _orch(tmp_path, make_writer_runner(tmp_path)).run()
+    assert state["current_stage"] == "complete"
+    assert state["tasks"]["T-E2E"]["status"] == "success"
+    assert state["tasks"]["T-E2E"]["stage"] == "e2e_validation"
+
+
+def test_e2e_failure_reworks_then_completes(tmp_path):
+    """A failed e2e run (against the deployed app) re-dispatches the developer
+    subtree; once the fix lands and e2e passes, the run completes."""
+    _write_workplan(tmp_path, E2E_TASKS)
+    runner, counts = make_e2e_rework_runner(tmp_path, fail_rounds=1)
+    state = _orch(tmp_path, runner).run()
+    assert state["current_stage"] == "complete"
+    assert counts["dev"] == 2        # original + one rework round
+    assert counts["e2e"] == 2
+    assert state["tasks"]["T-E2E"]["rework"] == 1
+    assert state["tasks"]["T-E2E"]["status"] == "success"
+
+
+def test_e2e_failure_escalates_after_one_rework(tmp_path):
+    """E2E has a per-stage rework cap of 1 (STAGE_REWORK_CAP): a persistently failing
+    e2e run escalates after a single rework round, and the failure is queued to
+    backlog.json — even though the global max_rework is higher."""
+    _write_workplan(tmp_path, E2E_TASKS)
+    runner, counts = make_e2e_rework_runner(tmp_path, fail_rounds=99)  # always fail
+    state = _orch(tmp_path, runner, max_rework=2).run()
+    assert state["current_stage"] == "failed"
+    assert state["tasks"]["T-E2E"]["status"] == "blocked"
+    assert counts["dev"] == 2        # original + exactly one rework round, then escalate
+    assert state["tasks"]["T-E2E"]["rework"] == 1
+    backlog = json.loads((tmp_path / "artifacts" / "backlog.json").read_text())
+    assert any("e2e_validation" in str(b.get("release_verdict", "")) for b in backlog)
 
 
 def test_per_task_code_spec_paths_resolve_and_run(tmp_path):

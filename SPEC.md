@@ -20,7 +20,7 @@ The pipeline is linear. Stages are identified by the exact keys used in `workflo
 ```
 requirement_ingestion → task_decomposition → planning_architecture
 → code_generation → code_review → testing_validation → deployment
-→ (monitoring_feedback) → complete
+→ e2e_validation → (monitoring_feedback) → complete
 ```
 
 Each stage starts only when its input artifact exists and validates against its schema.
@@ -68,9 +68,16 @@ Success: tests trace to requirements; `summary.failed == 0`; critical paths are 
 Owner: DevOps Agent
 Input: `review_report.json`, `test_plan.json`, validated build
 Output: `release_report.json`
-Success: app is deployed to the target environment and passes health checks; a rollback handle is recorded. **Production deploy is human-led (🟣).**
+Success: app is deployed to the target environment and passes health checks; a rollback handle is recorded. **Production deploy is human-led (🟣).** For a project with a browser frontend, the deploy serves the built UI on the **same origin** as the API so the result is browsable end-to-end (the e2e stage validates this single URL).
 
-### 3.8 Monitoring & Feedback — `monitoring_feedback`
+### 3.8 End-to-End Validation — `e2e_validation`
+Owner: E2E Agent
+Input: `release_report.json` (live browsable `url` + verdict), `requirements.json` (acceptance criteria)
+Output: `e2e_report.json`
+Success: each browser-facing acceptance criterion maps to ≥1 scenario; the deployed app is driven in a **real browser** via the Playwright MCP server (`@playwright/mcp`) and behaves as specified; `summary.failed == 0`. Verdict ∈ {`passed`, `passed_with_warnings`, `failed`}.
+A `failed` verdict triggers the **bounded rework loop** (§3.5, §8.3): the orchestrator re-dispatches the upstream developer subtree (and everything downstream — review, QA, deploy, e2e) with the failed scenarios as feedback. Because a post-deploy re-run is expensive (it re-fires the production-deploy checkpoint), the e2e rework cap is **one round** (`STAGE_REWORK_CAP`), after which it escalates and queues the failure to `backlog.json`. This stage is added only for projects with a browser UI; backend-only projects omit it.
+
+### 3.9 Monitoring & Feedback — `monitoring_feedback`
 Owner: Orchestrator Agent
 Input: the deployment's `release_report.json` (verdict + health checks)
 Output: a `monitoring_feedback` event and, on an unhealthy deploy, remediation items
@@ -85,8 +92,8 @@ that a future run's product agent can fold into new requirements.
 > A fuller loop (live runtime telemetry, automatic re-planning) remains future work.
 
 ## 4. Agent Roles
-Eight role-specialized agents are defined in `.claude/agents/`. There is no separate Monitor agent;
-Stage 8, when built, is owned by the Orchestrator.
+Nine role-specialized agents are defined in `.claude/agents/`. There is no separate Monitor agent;
+the final `monitoring_feedback` stage is owned by the Orchestrator.
 
 - **Product Agent** — interprets requirements and normalizes them into structured artifacts.
 - **Planner Agent** — breaks requirements into a dependency-ordered task list.
@@ -94,13 +101,14 @@ Stage 8, when built, is owned by the Orchestrator.
 - **Developer Agent(s)** — implement scoped code changes (parallelizable per task).
 - **Reviewer Agent** — evaluates code quality, correctness, and risk; emits a verdict.
 - **QA Agent** — generates and runs tests; reports pass/fail and coverage.
-- **DevOps Agent** — deploys approved builds and records health checks.
+- **DevOps Agent** — deploys approved builds and records health checks; for full-stack apps, serves the built UI on the same origin so the deploy is browsable.
+- **E2E Agent** — validates the deployed solution in a real browser via the Playwright MCP server; emits a pass/fail verdict over the acceptance criteria.
 - **Orchestrator Agent** — manages state transitions, retries, and escalation; owns no stage content.
 
 **Model strategy (cost ↔ capability).** Models are assigned per role, not globally:
 `architect` and `reviewer` run on **opus** (hardest reasoning; the reviewer is deliberately
 a *different and stronger* model than the `developer` to break the echo chamber);
-`developer`, `product`, `planner`, `qa`, `orchestrator` run on **sonnet**; the mechanical
+`developer`, `product`, `planner`, `qa`, `e2e`, `orchestrator` run on **sonnet**; the mechanical
 `devops` step runs on **haiku**. Each choice is pinned in the agent's frontmatter so cost
 can't silently regress; `--model` overrides all agents for a run when needed.
 
@@ -134,6 +142,7 @@ All artifacts must be parseable, versioned (`"spec_version": "v1"`), and schema-
 | `test_plan.json` | QA | `schemas/test_plan.schema.json` |
 | `review_report.json` | Reviewer | `schemas/review_report.schema.json` |
 | `release_report.json` | DevOps | `schemas/release_report.schema.json` |
+| `e2e_report.json` | E2E | `schemas/e2e_report.schema.json` |
 | `workflow_state.json` | Orchestrator | `schemas/workflow_state.schema.json` |
 | `events.log.jsonl` | all (append-only) | `schemas/event.schema.json` |
 
@@ -150,6 +159,10 @@ A stage advances only when the gate below passes (enforced before the next stage
   orders `testing_validation` after `code_review`).
 - `testing_validation` requires valid `code_spec.json`
 - `deployment` requires `review_report.json` verdict ∈ {`approved`, `approved_with_comments`} **AND** `test_plan.json` `summary.failed == 0` (defense‑in‑depth; a rejection is normally caught at `code_review`)
+- `e2e_validation` (UI projects only) requires valid `e2e_report.json`; the gate evaluates the
+  **verdict**: `failed` (or `summary.failed > 0`) → bounded rework loop (§3.8, §8.3) **capped at
+  one round** (`STAGE_REWORK_CAP`), then escalate + queue to `backlog.json`; not‑passing/missing
+  → recoverable. This validates the *deployed* solution in a real browser before the run completes.
 
 ## 8. Orchestrator Contract
 The Orchestrator owns **control flow only** — never the content of any artifact. Its single
@@ -170,14 +183,16 @@ stage without a passing gate, and may not skip validation.
 **8.3 Retry vs. escalate.** Failures are classified:
 - *Recoverable* (schema-validation miss, partial output, transient tool error) → retry with
   back-off up to `max_retries` (default 3).
-- *Reworkable* (review verdict `rejected`) → run a bounded review→fix loop: re-dispatch the
-  upstream developer subtree with the review's `blocking_issues` as feedback, up to
-  `max_rework` rounds (default 2), then escalate. This is the agent-level "generate →
-  feedback → modify" loop, distinct from a transient retry.
+- *Reworkable* (review verdict `rejected`, or e2e verdict `failed`) → run a bounded fix loop:
+  re-dispatch the upstream developer subtree with the gate's issues as feedback, then escalate.
+  The cap is **per stage** (`STAGE_REWORK_CAP`, default `max_rework` = 2): `code_review` uses 2,
+  `e2e_validation` uses **1** because a post-deploy re-run is expensive. This is the agent-level
+  "generate → feedback → modify" loop, distinct from a transient retry; on exhaustion the
+  failure is queued to `backlog.json`.
 - *Unrecoverable* (security violation, unsatisfiable contract, ambiguous
   requirements, unsafe request) → escalate immediately; do not retry.
-Retries are counted **per task**, not per stage. Rework rounds are counted on the reviewer
-task. Repeated escalation trips a circuit breaker that halts new dispatch.
+Retries are counted **per task**, not per stage. Rework rounds are counted on the gate task
+(the reviewer, or the e2e task). Repeated escalation trips a circuit breaker that halts new dispatch.
 
 **8.4 Idempotency & exactly-once effects.** A retry must not double-apply side effects. Work is
 keyed by `task_id` + `attempt`; the Orchestrator checks for a valid existing output before

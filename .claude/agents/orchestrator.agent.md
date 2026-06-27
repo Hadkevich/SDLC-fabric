@@ -19,12 +19,15 @@ Your job is to drive `artifacts/workflow_state.json` from `requirement_ingestion
 ## Stage sequence
 ```
 requirement_ingestion → task_decomposition → planning_architecture
-→ code_generation → code_review → testing_validation → deployment → complete
+→ code_generation → code_review → testing_validation → deployment
+→ e2e_validation → complete
 ```
-After `deployment` succeeds, run the minimal `monitoring_feedback` pass (SPEC §3.8): fold the
-release health into a `monitoring_feedback` event and queue `artifacts/backlog.json`
-remediation if the deploy is unhealthy. It is a feedback signal, not a gate. Then advance to
-`complete`. `failed` remains the terminal escalation state.
+`e2e_validation` runs only for projects with a browser UI (the planner emits an `e2e-agent`
+task that depends on the devops task); a failed e2e run reworks the developer subtree once,
+then escalates. After the final DAG task succeeds, run the minimal `monitoring_feedback` pass
+(SPEC §3.9): fold the release health into a `monitoring_feedback` event and queue
+`artifacts/backlog.json` remediation if the deploy is unhealthy. It is a feedback signal, not a
+gate. Then advance to `complete`. `failed` remains the terminal escalation state.
 
 ## Process (run on each invocation)
 1. **Load & reconcile.** Read `workflow_state.json`. If missing, create it with every stage

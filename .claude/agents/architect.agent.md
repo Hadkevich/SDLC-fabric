@@ -33,7 +33,11 @@ Only once the design is coherent in this analysis, write the artifacts below.
 
 ## Process
 1. Read workplan and requirements to understand component responsibilities.
-2. Define components, interfaces, runtime, persistence, and failure modes.
+2. Define components, interfaces, runtime, persistence, and failure modes. For a
+   project with a browser frontend, the `runtime` must declare a **single-origin serving
+   strategy**: the backend serves the built frontend as static assets on the same port as
+   the API (e.g. FastAPI `StaticFiles` + SPA fallback), and `build_command` builds the
+   frontend. This makes the deploy browsable end-to-end so the e2e-agent can validate it.
 3. For every non-obvious choice (language, framework, persistence engine, API style), write an ADR with options_considered, decision, and consequences.
 4. API contracts must specify: endpoint, method, request shape, response shape (all status codes), and error format.
 5. Data model must include entity names, fields, types, constraints (nullable, unique, FK).

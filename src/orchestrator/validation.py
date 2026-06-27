@@ -26,6 +26,7 @@ SCHEMA_BY_NAME = {
     "test_plan.json": "test_plan.schema.json",
     "review_report.json": "review_report.schema.json",
     "release_report.json": "release_report.schema.json",
+    "e2e_report.json": "e2e_report.schema.json",
     "workflow_state.json": "workflow_state.schema.json",
 }
 

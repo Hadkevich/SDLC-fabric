@@ -151,6 +151,45 @@ class ClaudeAgentRunner(Runner):
             f"conform exactly. Do not modify another agent's artifacts."
         )
 
+    def _mcp_tools_from_frontmatter(self, owner_agent: str, project_root: Path) -> list[str]:
+        """Parse the agent's .md frontmatter and return declared MCP tool names.
+
+        Agents that declare ``mcp__*`` tools in their frontmatter ``tools:`` list
+        need those tools explicitly granted via ``--allowedTools`` in headless
+        (``-p``) mode, where an interactive permission prompt is not available.
+        This is a belt-and-suspenders complement to ``settings.json`` ``allow``.
+        """
+        # Agent files follow the convention <short-name>.agent.md
+        # (e.g. "e2e-agent" → "e2e.agent.md", "developer-agent" → "developer.agent.md").
+        # Fall back to <owner_agent>.md for any non-standard names.
+        short = owner_agent.removesuffix("-agent")
+        agent_file = Path(project_root) / ".claude" / "agents" / f"{short}.agent.md"
+        if not agent_file.exists():
+            agent_file = Path(project_root) / ".claude" / "agents" / f"{owner_agent}.md"
+        if not agent_file.exists():
+            return []
+        try:
+            text = agent_file.read_text()
+        except OSError:
+            return []
+        if not text.startswith("---"):
+            return []
+        end = text.find("\n---", 3)
+        if end == -1:
+            return []
+        for line in text[3:end].splitlines():
+            stripped = line.strip()
+            if stripped.startswith("tools:"):
+                bracket_start = stripped.find("[")
+                bracket_end = stripped.find("]")
+                if bracket_start != -1 and bracket_end != -1:
+                    return [
+                        t.strip()
+                        for t in stripped[bracket_start + 1:bracket_end].split(",")
+                        if t.strip().startswith("mcp__")
+                    ]
+        return []
+
     def _build_cmd(self, task, project_root):
         cmd = [self.cli, "-p", self._prompt(task, project_root),
                "--output-format", "stream-json", "--verbose",
@@ -160,6 +199,8 @@ class ClaudeAgentRunner(Runner):
             cmd += ["--model", self.model]
         for d in self.add_dirs:
             cmd += ["--add-dir", d]
+        for tool in self._mcp_tools_from_frontmatter(task["owner_agent"], project_root):
+            cmd += ["--allowedTools", tool]
         cmd += self.extra_args
         return cmd
 

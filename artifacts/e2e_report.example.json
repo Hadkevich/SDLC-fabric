@@ -1,0 +1,77 @@
+{
+    "spec_version": "v1",
+    "workflow_id": "wf-habit-tracker-001",
+    "task_id": "T-09-E2E",
+    "base_url": "http://localhost:49160",
+    "browser": "chromium",
+    "scenarios": [
+        {
+            "scenario_id": "E2E-001",
+            "name": "User logs in and reaches the dashboard",
+            "maps_to_requirement": "Role-based login routes to the correct dashboard",
+            "steps": [
+                "Navigate to base_url",
+                "Fill the login form with valid developer credentials and submit",
+                "Wait for the developer dashboard to render"
+            ],
+            "given": "The deployed app is live at base_url",
+            "when": "A developer signs in with valid credentials",
+            "then": "The developer dashboard renders with at least one project card",
+            "status": "pass",
+            "screenshot_ref": "artifacts/e2e-screens/E2E-001-dashboard.png"
+        },
+        {
+            "scenario_id": "E2E-002",
+            "name": "Match card shows score and explanation",
+            "maps_to_requirement": "Developer dashboard renders match score and explanation",
+            "steps": [
+                "On the developer dashboard, read the first card's [data-testid=match-score]",
+                "Assert the score is rendered as a percentage",
+                "Assert [data-testid=match-explanation] is non-empty"
+            ],
+            "given": "The developer dashboard is loaded with recommendations",
+            "when": "The first match card renders",
+            "then": "match-score and match-explanation are visible and populated",
+            "status": "pass",
+            "screenshot_ref": "artifacts/e2e-screens/E2E-002-card.png"
+        },
+        {
+            "scenario_id": "E2E-003",
+            "name": "Accept feedback updates the UI",
+            "maps_to_requirement": "Accept/Reject feedback submits and confirms",
+            "steps": [
+                "Click [data-testid=accept-button] on the first card",
+                "Wait for [data-testid=feedback-submitted]"
+            ],
+            "given": "A match card is visible",
+            "when": "The user clicks Accept",
+            "then": "A feedback-submitted confirmation appears",
+            "status": "pass",
+            "screenshot_ref": "artifacts/e2e-screens/E2E-003-feedback.png"
+        },
+        {
+            "scenario_id": "E2E-004",
+            "name": "Manager dashboard shows risk badges without raw vectors",
+            "maps_to_requirement": "Manager dashboard exposes risk badges, never raw behavioral vectors",
+            "steps": [
+                "Sign in as a manager and select a team",
+                "Assert risk badges [data-testid^=risk-badge-] render",
+                "Assert no raw work_style / motivation vectors appear in the DOM"
+            ],
+            "given": "A manager is signed in and a team is selected",
+            "when": "The manager dashboard renders the team risk summary",
+            "then": "Per-developer risk badges show, and no raw behavioral data is leaked",
+            "status": "pass",
+            "screenshot_ref": "artifacts/e2e-screens/E2E-004-manager.png"
+        }
+    ],
+    "summary": {
+        "total": 4,
+        "passed": 4,
+        "failed": 0,
+        "skipped": 0,
+        "coverage_note": "Covers login routing, developer match cards, feedback flow, and manager risk-summary privacy."
+    },
+    "verdict": "passed",
+    "validated_at": "2026-06-24T10:05:00Z"
+}

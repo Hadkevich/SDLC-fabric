@@ -24,12 +24,22 @@ repo-root run log).
 
 ```
 product-agent → planner-agent → architect-agent → developer-agent(s)
-→ reviewer-agent → qa-agent → devops-agent
+→ reviewer-agent → qa-agent → devops-agent → e2e-agent
 ```
 
 Each stage reads input artifacts → produces output artifacts → the orchestrator
 validates them against their schema and applies the stage gate → appends an event
 to `events.log.jsonl`.
+
+For projects with a browser UI, `devops-agent` deploys the full app on a single
+browsable URL and `e2e-agent` then validates it in a real browser via the
+**Playwright MCP** server (`@playwright/mcp`), producing `e2e_report.json`. A failed
+E2E run re-dispatches the developer subtree once (bounded rework) before escalating.
+
+**Browser-validation prerequisites** (only needed to run the live `e2e-agent`): Node.js
+on PATH for `npx @playwright/mcp`, and the Playwright browsers installed once with
+`npx playwright install --with-deps chromium`. The Playwright MCP server is declared in
+`.mcp.json`; `e2e-agent` is granted `mcp__playwright__*` tools in `.claude/settings.json`.
 
 ## Running a workflow
 

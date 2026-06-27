@@ -5,7 +5,8 @@
       "Bash(python3 -m pytest tests/)",
       "Bash(python3 -m pytest tests/:*)",
       "Bash(PYTHONPATH=src python3 -m orchestrator:*)",
-      "Bash(./observability/serve.sh:*)"
+      "Bash(./observability/serve.sh:*)",
+      "mcp__playwright"
     ],
     "deny": [
       "Read(./**/.env)",

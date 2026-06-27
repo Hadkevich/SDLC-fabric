@@ -12,6 +12,7 @@
             "enum": ["local", "staging", "production"]
         },
         "artifact_ref": { "type": "string" },
+        "url": { "type": "string" },
         "deploy_command": { "type": "string" },
         "health_checks": {
             "type": "array",

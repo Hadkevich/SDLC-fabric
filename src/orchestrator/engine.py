@@ -29,7 +29,7 @@ DEFAULT_SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "schemas"
 STAGE_SEQUENCE = [
     "requirement_ingestion", "task_decomposition", "planning_architecture",
     "code_generation", "code_review", "testing_validation", "deployment",
-    "monitoring_feedback",
+    "e2e_validation", "monitoring_feedback",
 ]
 
 # Which lifecycle stage each agent's task belongs to.
@@ -41,7 +41,16 @@ AGENT_STAGE = {
     "reviewer-agent": "code_review",
     "qa-agent": "testing_validation",
     "devops-agent": "deployment",
+    "e2e-agent": "e2e_validation",
     "orchestrator-agent": "monitoring_feedback",
+}
+
+# Per-stage rework cap override (SPEC §8.3). Stages not listed use ``max_rework``.
+# An e2e_validation failure runs against the *deployed* app, so a full re-dispatch
+# of the developer subtree (re-dev → re-deploy → re-E2E, re-firing the production
+# deploy checkpoint) is expensive — cap it at a single round before escalating.
+STAGE_REWORK_CAP = {
+    "e2e_validation": 1,
 }
 
 # Mandatory human sign-offs before entering a stage (SPEC §8.6).
@@ -52,6 +61,7 @@ HUMAN_GATES = {
 }
 
 _APPROVED_VERDICTS = {"approved", "approved_with_comments"}
+_E2E_PASS_VERDICTS = {"passed", "passed_with_warnings"}
 
 # The linear "prelude" stages that run BEFORE a workplan DAG exists. They are not
 # tasks in the DAG — they *produce* it (requirements → workplan). Modelled as
@@ -431,7 +441,7 @@ class Orchestrator:
             # so we never mutate a task that a sibling thread is still running.
             self._drain_rework(state, task_by_id)
 
-        self._monitor(state)  # Stage 8 feedback pass (SPEC §3.8) before completing
+        self._monitor(state)  # monitoring_feedback pass (SPEC §3.9) before completing
         state["current_stage"] = "complete"
         state["halted"] = False
         self._persist(state)
@@ -566,22 +576,25 @@ class Orchestrator:
 
     # ------------------------------------------------------------------ rework loop
     def _request_rework(self, state, task, stage, issues) -> bool:
-        """A reviewer task returned verdict `rejected`. Run a bounded fix loop
-        (SPEC §8.3): record the request, reset the reviewer to ``pending``, and let
-        the post-wave drain reset the upstream developer subtree so the fix re-runs.
-        Once ``max_rework`` rounds are spent, escalate instead of looping forever.
-        Caller holds ``self._lock``. Returns True (not blocked) so the wave proceeds
-        and :meth:`run` reschedules the reset tasks."""
+        """A gate asked for a fix (review `rejected`, or e2e `failed`). Run a bounded
+        fix loop (SPEC §8.3): record the request, reset this task to ``pending``, and
+        let the post-wave drain reset the upstream developer subtree so the fix
+        re-runs. The cap is per-stage (``STAGE_REWORK_CAP``, default ``max_rework``);
+        once spent, escalate — and queue the failure to ``backlog.json`` so the signal
+        survives. Caller holds ``self._lock``. Returns True (not blocked) so the wave
+        proceeds and :meth:`run` reschedules the reset tasks."""
         ts = state["tasks"][task["task_id"]]
-        if ts.get("rework", 0) >= self.max_rework:
+        cap = STAGE_REWORK_CAP.get(stage, self.max_rework)
+        if ts.get("rework", 0) >= cap:
+            self._append_backlog(state, list(issues), f"{stage}_rework_exhausted")
             return self._block(state, task, stage, list(issues) + [
-                f"review still rejected after {self.max_rework} rework round(s)"])
+                f"{stage} gate still failing after {cap} rework round(s)"])
         ts["rework"] = ts.get("rework", 0) + 1
         ts["status"] = "pending"  # re-run after the developer subtree is reset
         ts.pop("blocking_issues", None)
         self._rework_requests.add(task["task_id"])
         self._event(state, stage, task["owner_agent"], "retry", task,
-                    summary=f"review rejected; rework round {ts['rework']} — "
+                    summary=f"{stage} gate failed; rework round {ts['rework']} — "
                             f"re-dispatching upstream developer task(s)",
                     blocking_issues=list(issues), retry_count=ts["rework"])
         self._persist(state)
@@ -592,20 +605,22 @@ class Orchestrator:
         with self._lock:
             pending = list(self._rework_requests)
             self._rework_requests.clear()
-        for review_tid in pending:
-            self._apply_rework(state, review_tid, task_by_id)
+        for gate_tid in pending:
+            self._apply_rework(state, gate_tid, task_by_id)
 
-    def _apply_rework(self, state, review_tid, task_by_id) -> None:
-        """Reset the developer ancestor(s) of a rejected reviewer task — and every
-        task downstream of them (QA, the review itself, deploy) — back to
-        ``pending`` so the fix re-runs end to end. Stale declared outputs are
-        removed so a failed re-run can't validate against last round's artifacts.
-        The per-task ``rework`` counter is preserved so the cap still bites."""
-        devs = {a for a in self._ancestors(review_tid, task_by_id)
+    def _apply_rework(self, state, gate_tid, task_by_id) -> None:
+        """Reset the developer ancestor(s) of a gate task that asked for a fix (a
+        rejected review or a failed e2e run) — and every task downstream of them
+        (QA, the review/e2e itself, deploy) — back to ``pending`` so the fix re-runs
+        end to end. Stale declared outputs are removed so a failed re-run can't
+        validate against last round's artifacts. The per-task ``rework`` counter is
+        preserved so the cap still bites."""
+        devs = {a for a in self._ancestors(gate_tid, task_by_id)
                 if task_by_id[a].get("owner_agent") == "developer-agent"}
         if not devs:
-            self._block(state, task_by_id[review_tid], "code_review",
-                        ["review rejected but no upstream developer-agent task "
+            gate_stage = state["tasks"][gate_tid].get("stage", "code_review")
+            self._block(state, task_by_id[gate_tid], gate_stage,
+                        ["gate asked for rework but no upstream developer-agent task "
                          "to rework — escalating"])
             return
         reset = devs | self._dependents(devs, task_by_id)
@@ -690,6 +705,8 @@ class Orchestrator:
             return (kind, issues)
         if stage == "deployment":
             return self._deploy_gate()
+        if stage == "e2e_validation":
+            return self._e2e_gate(task)
         return ("ok", [])
 
     def _review_gate(self, task):
@@ -750,9 +767,44 @@ class Orchestrator:
 
         return ("recoverable", issues) if issues else ("ok", [])
 
+    def _e2e_gate(self, task):
+        """e2e_validation gate (SPEC §3.x, §7): browser validation of the *deployed*
+        app drives flow. Mirrors the review gate so a real UI regression is fixed,
+        not shipped. Returns:
+          - ('ok', [])         verdict ∈ {passed, passed_with_warnings}, no failures
+          - ('rework', issues) verdict == 'failed' / summary.failed > 0 → bounded fix
+                               loop (§8.3), capped at one round for e2e (STAGE_REWORK_CAP)
+          - ('recoverable', …) report missing/unreadable or verdict absent
+        """
+        report = None
+        for rel in task.get("outputs", []):
+            if Path(rel).name == "e2e_report.json":
+                report = self.project / rel
+                break
+        if report is None:
+            report = self.artifacts / "e2e_report.json"
+        if not report.exists():
+            return ("recoverable", ["e2e gate: e2e_report.json missing"])
+        try:
+            data = json.loads(report.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            return ("recoverable", [f"e2e gate: cannot read e2e_report.json: {e}"])
+        verdict = data.get("verdict")
+        failed = data.get("summary", {}).get("failed")
+        if verdict == "failed" or (isinstance(failed, int) and failed > 0):
+            issues = [f"e2e gate: verdict {verdict!r}, summary.failed == {failed}"]
+            for sc in (data.get("scenarios") or []):
+                if isinstance(sc, dict) and sc.get("status") == "fail":
+                    issues.append(f"failed scenario: {sc.get('name') or sc.get('scenario_id')}"
+                                  + (f" — {sc['error']}" if sc.get("error") else ""))
+            return ("rework", issues[:11])
+        if verdict not in _E2E_PASS_VERDICTS:
+            return ("recoverable", [f"e2e gate: verdict {verdict!r} not passing"])
+        return ("ok", [])
+
     # ------------------------------------------------------------------ monitoring
     def _monitor(self, state) -> None:
-        """Minimal Stage 8 (monitoring_feedback, SPEC §3.8). After a successful
+        """Minimal monitoring_feedback stage (SPEC §3.9). After a successful
         deployment, fold the release health into a feedback event; if the deploy is
         unhealthy, append a remediation item to ``artifacts/backlog.json`` so the
         signal can seed a future run. This is a feedback *signal*, not a gate — it

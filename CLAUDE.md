@@ -39,6 +39,7 @@ All paths below are relative to `projects/<project-name>/artifacts/`.
 | `test_plan.json` | qa-agent | `schemas/test_plan.schema.json` |
 | `review_report.json` | reviewer-agent | `schemas/review_report.schema.json` |
 | `release_report.json` | devops-agent | `schemas/release_report.schema.json` |
+| `e2e_report.json` | e2e-agent | `schemas/e2e_report.schema.json` |
 | `workflow_state.json` | orchestrator-agent | `schemas/workflow_state.schema.json` |
 | `events.log.jsonl` | all agents (append-only) | `schemas/event.schema.json` |
 
@@ -51,6 +52,10 @@ All paths below are relative to `projects/<project-name>/artifacts/`.
   it never advances to QA/deploy
 - `testing_validation` requires valid `code_spec.json` (planner orders it **after** `code_review`)
 - `deployment` requires `review_report.json` verdict ∈ {approved, approved_with_comments} AND `test_plan.json` summary.failed == 0
+- `e2e_validation` (UI projects only) requires valid `e2e_report.json` with verdict ∈
+  {passed, passed_with_warnings} AND summary.failed == 0; a `failed` verdict triggers a
+  bounded developer rework loop **capped at one round** (post-deploy re-runs are
+  expensive), then escalates and queues the failure to `backlog.json`
 
 ## Workflow Reference
 The agentic loop diagram is at `workflow/mermaid.md`. All agents should use it as the authoritative visual reference for stage sequence, ownership, and escalation paths.
