@@ -24,10 +24,22 @@ requirement_ingestion → task_decomposition → planning_architecture
 ```
 `e2e_validation` runs only for projects with a browser UI (the planner emits an `e2e-agent`
 task that depends on the devops task); a failed e2e run reworks the developer subtree once,
-then escalates. After the final DAG task succeeds, run the minimal `monitoring_feedback` pass
-(SPEC §3.9): fold the release health into a `monitoring_feedback` event and queue
-`artifacts/backlog.json` remediation if the deploy is unhealthy. It is a feedback signal, not a
-gate. Then advance to `complete`. `failed` remains the terminal escalation state.
+then escalates. After the final DAG task succeeds, run the `monitoring_feedback` pass
+(SPEC §3.9): fold the release health into a `monitoring_feedback` event. A **healthy** deploy
+advances to `complete`. An **unhealthy** deploy queues an item to `artifacts/backlog.json` and,
+when the feedback loop is enabled (`max_feedback_cycles > 0`), drives a **bounded two-level
+remediation loop**:
+- **Level 1 — in-run health rework** (cap `STAGE_REWORK_CAP['monitoring_feedback']` = 1):
+  re-dispatch the developer subtree of the deploy (re-dev → re-deploy → re-monitor), reusing the
+  rework machinery. Each re-deploy still passes the `production_deploy` checkpoint.
+- **Level 2 — cross-run re-plan** (cap `max_feedback_cycles`): re-run the product agent so it
+  folds the open `backlog.json` items into updated requirements, regenerate the workplan, and
+  re-run the whole pipeline.
+When both levels are exhausted and the deploy is still unhealthy, mark the backlog items
+`escalated`, append a `blocked` event, and finalize `failed`. When a later monitor comes back
+healthy, mark the outstanding backlog items `resolved`. With `max_feedback_cycles == 0` the stage
+stays a one-shot signal (queue backlog, then `complete`). `failed` remains the terminal escalation
+state.
 
 ## Process (run on each invocation)
 1. **Load & reconcile.** Read `workflow_state.json`. If missing, create it with every stage

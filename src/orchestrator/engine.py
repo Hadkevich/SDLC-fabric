@@ -13,6 +13,7 @@ predicates over schemas and a couple of numeric/enum checks (SPEC §8.2).
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 import time
 import uuid
@@ -49,8 +50,12 @@ AGENT_STAGE = {
 # An e2e_validation failure runs against the *deployed* app, so a full re-dispatch
 # of the developer subtree (re-dev → re-deploy → re-E2E, re-firing the production
 # deploy checkpoint) is expensive — cap it at a single round before escalating.
+# monitoring_feedback uses the same cap for its Level-1 in-run health rework: an
+# unhealthy deploy re-runs the developer subtree once (re-dev → re-deploy → re-monitor)
+# before the loop escalates to a Level-2 cross-run re-plan (SPEC §3.9).
 STAGE_REWORK_CAP = {
     "e2e_validation": 1,
+    "monitoring_feedback": 1,
 }
 
 # Mandatory human sign-offs before entering a stage (SPEC §8.6).
@@ -107,7 +112,7 @@ class Orchestrator:
     def __init__(self, project, runner, *, auto_approve: bool = False,
                  approvals=None, schemas_dir=None, max_retries: int = 3,
                  max_rework: int = 2, max_parallel: int = 4,
-                 max_cost_usd: float | None = None,
+                 max_cost_usd: float | None = None, max_feedback_cycles: int = 0,
                  now=None, new_id=None, sleep=None, backoff=None):
         self.project = Path(project)
         self.runner = runner
@@ -122,6 +127,12 @@ class Orchestrator:
         # from events.log.jsonl reaches this, the breaker halts new dispatch. None
         # disables the check (the per-task timeout is the only other bound).
         self.max_cost_usd = max_cost_usd
+        # Bounded monitoring_feedback re-planning cycles (SPEC §3.9). 0 (default) keeps
+        # the legacy behaviour: an unhealthy deploy queues a backlog signal and the run
+        # completes. >0 enables the closed feedback loop — an unhealthy deploy drives a
+        # Level-1 in-run health rework, then up to this many Level-2 cross-run re-plans
+        # (product folds backlog.json into updated requirements), then escalates.
+        self.max_feedback_cycles = max(0, max_feedback_cycles)
         # Reviewer task_ids whose review came back `rejected`; drained after each
         # wave joins, so the developer subtree is reset *outside* a running wave.
         self._rework_requests: set[str] = set()
@@ -155,20 +166,28 @@ class Orchestrator:
 
     def _load_or_init_state(self, workplan: dict) -> dict:
         if self.state_path.exists():
-            return json.loads(self.state_path.read_text())
-        ts = self._ts()
-        return {
-            "spec_version": "v1",
-            "workflow_id": workplan.get("workflow_id") or self._new_id(),
-            "current_stage": "requirement_ingestion",
-            "stages": {},
-            "tasks": {},
-            "halted": False,
-            "max_retries": self.max_retries,
-            "max_rework": self.max_rework,
-            "created_at": ts,
-            "updated_at": ts,
-        }
+            state = json.loads(self.state_path.read_text())
+        else:
+            ts = self._ts()
+            state = {
+                "spec_version": "v1",
+                "workflow_id": workplan.get("workflow_id") or self._new_id(),
+                "current_stage": "requirement_ingestion",
+                "stages": {},
+                "tasks": {},
+                "halted": False,
+                "max_retries": self.max_retries,
+                "max_rework": self.max_rework,
+                "created_at": ts,
+                "updated_at": ts,
+            }
+        # Monitoring feedback-loop bookkeeping (SPEC §3.9). setdefault so a state file
+        # written before the loop existed resumes cleanly. The per-round audit trail
+        # lives in events.log.jsonl (SPEC §8.1) — these are just the bounded counters.
+        state.setdefault("max_feedback_cycles", self.max_feedback_cycles)
+        state.setdefault("feedback_cycle", 0)
+        state.setdefault("health_rework", 0)
+        return state
 
     def _persist(self, state: dict) -> None:
         """Atomic write: temp file + rename (SPEC §8.1) so a crash can never leave
@@ -314,6 +333,10 @@ class Orchestrator:
         self._ensure_task_states(state, PRELUDE_TASKS)
         if state.get("halted"):
             return state
+        # Mark this run prompt-driven so a monitoring feedback cycle (SPEC §3.9) knows a
+        # product agent exists to re-plan with. Empty on resume — the flag is persisted.
+        if request:
+            state["prompt_driven"] = True
         self._persist(state)
 
         outcome = self._run_prelude(request, state)
@@ -377,33 +400,85 @@ class Orchestrator:
         return n
 
     def run(self) -> dict:
-        try:
-            workplan = self._load_workplan()
-        except Escalation as e:
-            return self._abort(self._minimal_failed_state(), "task_decomposition", e)
+        """Drive the workflow to a terminal state, wrapping the DAG scheduler in the
+        bounded monitoring_feedback loop (SPEC §3.9).
 
-        tasks = workplan["tasks"]
-        state = self._load_or_init_state(workplan)
-        self._ensure_task_states(state, tasks)
+        Each driver iteration (re)loads the workplan — a Level-2 feedback cycle
+        regenerates it — runs the DAG in waves, then evaluates deploy health. An
+        unhealthy deploy drives a **Level-1** in-run health rework, then up to
+        ``max_feedback_cycles`` **Level-2** cross-run re-plans (the product agent folds
+        ``backlog.json`` into updated requirements), then escalates. With
+        ``max_feedback_cycles == 0`` it stays a one-shot signal (legacy behaviour): an
+        unhealthy deploy queues a backlog item and the run still completes.
+        """
+        while True:
+            try:
+                workplan = self._load_workplan()
+            except Escalation as e:
+                return self._abort(self._minimal_failed_state(), "task_decomposition", e)
 
-        if state.get("halted"):
-            return state  # kill switch already tripped; dispatch nothing
+            tasks = workplan["tasks"]
+            state = self._load_or_init_state(workplan)
+            self._ensure_task_states(state, tasks)
 
-        task_by_id = {t["task_id"]: t for t in tasks}
+            if state.get("halted"):
+                return state  # kill switch already tripped; dispatch nothing
 
-        try:
-            order = self._topo_order(tasks)
-        except Escalation as e:
-            return self._abort(state, "task_decomposition", e)
+            task_by_id = {t["task_id"]: t for t in tasks}
+            try:
+                order = self._topo_order(tasks)
+            except Escalation as e:
+                return self._abort(state, "task_decomposition", e)
 
-        # Wave scheduler (SPEC §8.5). Each iteration selects every task whose
-        # dependencies are all `success` and dispatches the whole set concurrently.
-        # Independent tasks (e.g. parallel developer-agent tasks, or reviewer + QA
-        # on the same finished code) overlap; dependent tasks fall to a later wave.
-        # Topo order only breaks ties, keeping selection deterministic.
+            status = self._run_dag(state, task_by_id, order)
+            if status == "paused":
+                return state  # re-run after approval to resume (e.g. production_deploy)
+            if status == "failed":
+                return self._finalize_failed(state)
+
+            # DAG done → monitoring_feedback pass (SPEC §3.9).
+            health, issues, verdict = self._monitor(state)
+            if health != "unhealthy":
+                self._resolve_open_backlog(state)  # close items a prior cycle opened
+                break
+            # Unhealthy deploy → record the durable remediation signal.
+            self._append_backlog(state, issues, verdict)
+            if self.max_feedback_cycles <= 0:
+                break  # loop disabled — signal only, then complete (legacy behaviour)
+            # Level 1: bounded in-run health rework (re-dev → re-deploy → re-monitor).
+            if self._try_health_rework(state, task_by_id, issues):
+                continue
+            # Level 2: bounded cross-run re-plan (product folds backlog → new workplan).
+            outcome = self._try_feedback_cycle(state, issues)
+            if outcome == "rerun":
+                continue
+            if outcome == "paused":
+                return state
+            if outcome == "failed":
+                return self._finalize_failed(state)
+            # Both remediation levels exhausted → escalate to a human.
+            self._escalate_monitoring(state, issues)
+            return self._finalize_failed(state)
+
+        state["current_stage"] = "complete"
+        state["halted"] = False
+        self._persist(state)
+        return state
+
+    def _run_dag(self, state, task_by_id, order) -> str:
+        """Wave scheduler (SPEC §8.5). Each iteration selects every task whose
+        dependencies are all `success` and dispatches the whole set concurrently.
+        Independent tasks (e.g. parallel developer-agent tasks, or reviewer + QA on
+        the same finished code) overlap; dependent tasks fall to a later wave. Topo
+        order only breaks ties, keeping selection deterministic.
+
+        Returns ``"done"`` (every task success), ``"paused"`` (stopped at a human
+        checkpoint — re-run after approval), or ``"failed"`` (a task blocked, the cost
+        breaker tripped, or remaining deps can never succeed). The caller owns
+        finalization and the monitoring_feedback pass."""
         while True:
             if any(state["tasks"][tid]["status"] == "blocked" for tid in order):
-                return self._finalize_failed(state)  # an upstream task escalated
+                return "failed"  # an upstream task escalated
 
             if self._over_budget():  # cost breaker (ENG-8) — halt before new spend
                 spent = self._total_cost()
@@ -413,39 +488,33 @@ class Orchestrator:
                                     f"(spent ${spent:.2f}) — halting new dispatch",
                             blocking_issues=[f"cost budget ${self.max_cost_usd:.2f} "
                                              f"exceeded at ${spent:.2f}"])
-                return self._finalize_failed(state)
+                return "failed"
 
             remaining = [tid for tid in order
                          if state["tasks"][tid]["status"] != "success"]
             if not remaining:
-                break  # every task done
+                return "done"  # every task done
 
             runnable = [tid for tid in remaining
                         if all(state["tasks"].get(d, {}).get("status") == "success"
                                for d in state["tasks"][tid].get("depends_on", []))]
             if not runnable:
                 # remaining tasks depend on something that can never succeed
-                return self._finalize_failed(state)
+                return "failed"
 
             # Human checkpoints fire before the wave launches: if any runnable task
             # needs an un-granted sign-off, pause the whole run there (SPEC §8.6).
             for tid in runnable:
                 if self._gate_pause(state, task_by_id[tid], state["tasks"][tid]["stage"]):
-                    return state  # re-run after approval to resume
+                    return "paused"  # re-run after approval to resume
 
             if self._run_wave(state, [task_by_id[tid] for tid in runnable]):
-                return self._finalize_failed(state)  # a task in the wave blocked
+                return "failed"  # a task in the wave blocked
 
             # A rejected review (caught by the code_review gate) re-dispatches the
             # upstream developer subtree. Apply resets now, after the wave joined,
             # so we never mutate a task that a sibling thread is still running.
             self._drain_rework(state, task_by_id)
-
-        self._monitor(state)  # monitoring_feedback pass (SPEC §3.9) before completing
-        state["current_stage"] = "complete"
-        state["halted"] = False
-        self._persist(state)
-        return state
 
     def _run_wave(self, state, tasks) -> bool:
         """Run every task in ``tasks`` concurrently and return True if ANY ended
@@ -803,32 +872,32 @@ class Orchestrator:
         return ("ok", [])
 
     # ------------------------------------------------------------------ monitoring
-    def _monitor(self, state) -> None:
-        """Minimal monitoring_feedback stage (SPEC §3.9). After a successful
-        deployment, fold the release health into a feedback event; if the deploy is
-        unhealthy, append a remediation item to ``artifacts/backlog.json`` so the
-        signal can seed a future run. This is a feedback *signal*, not a gate — it
-        never fails a build that already passed every prior gate (the deploy gate
-        owns go/no-go). Owned by the orchestrator; it is not a DAG task."""
+    def _monitor(self, state):
+        """The monitoring_feedback stage (SPEC §3.9): after a successful deployment,
+        fold the release health into a feedback event and classify it. Returns
+        ``(health, issues, verdict)`` where ``health`` ∈ {``"healthy"``,
+        ``"unhealthy"``, ``"n/a"``}. Owned by the orchestrator; it is not a DAG task
+        and never fails a build that already passed every prior gate — the deploy gate
+        owns go/no-go. The *loop* logic (backlog, rework, re-plan, escalate) lives in
+        :meth:`run`; this method only observes and reports."""
         dep = next((t for t in state.get("tasks", {}).values()
                     if t.get("stage") == "deployment" and t.get("status") == "success"),
                    None)
         report = self.artifacts / "release_report.json"
         if not dep or not report.exists():
-            return
+            return ("n/a", [], None)
         try:
             data = json.loads(report.read_text())
         except (json.JSONDecodeError, OSError):
-            return
+            return ("n/a", [], None)
         verdict = data.get("verdict")
         checks = data.get("health_checks") or []
         failed = [c for c in checks if isinstance(c, dict) and c.get("status") == "fail"]
-        healthy = verdict == "success" and not failed
-        if healthy:
+        if verdict == "success" and not failed:
             self._event(state, "monitoring_feedback", "orchestrator-agent", "success",
                         summary=f"deploy healthy (verdict={verdict}, "
                                 f"{len(checks)} health check(s) passed)")
-            return
+            return ("healthy", [], verdict)
         issues = ([f"health check failed: {c.get('name', '?')}" for c in failed]
                   or [f"release verdict {verdict!r} is not 'success'"])
         self._event(state, "monitoring_feedback", "orchestrator-agent", "failure",
@@ -836,32 +905,174 @@ class Orchestrator:
                             f"{len(failed)}/{len(checks)} health check(s) failed) — "
                             f"remediation queued to backlog.json",
                     blocking_issues=issues)
-        self._append_backlog(state, issues, verdict)
+        return ("unhealthy", issues, verdict)
 
-    def _append_backlog(self, state, issues, verdict) -> None:
-        """Append a remediation entry to ``artifacts/backlog.json`` (atomic write).
-        A future run's product agent can fold these into new requirements — the
-        minimal closed feedback loop the brief's Stage 8 calls for."""
+    # -------------------------------------------------------- feedback loop (SPEC §3.9)
+    def _try_health_rework(self, state, task_by_id, issues) -> bool:
+        """Level 1 — bounded *in-run* remediation of an unhealthy deploy. Re-dispatch
+        the developer subtree of the deployment task (reusing the rework machinery), so
+        the fix re-runs end to end (re-dev → re-deploy → re-monitor). Capped at
+        ``STAGE_REWORK_CAP['monitoring_feedback']`` (one round, like e2e — a post-deploy
+        re-run is expensive). Returns True when a round was applied (caller re-runs the
+        DAG), False when the cap is spent or there is no upstream code to rework (caller
+        falls through to a Level-2 re-plan)."""
+        cap = STAGE_REWORK_CAP.get("monitoring_feedback", self.max_rework)
+        if state.get("health_rework", 0) >= cap:
+            return False
+        deploy_tid = next((tid for tid, t in state["tasks"].items()
+                           if t.get("stage") == "deployment"), None)
+        if deploy_tid is None or deploy_tid not in task_by_id:
+            return False
+        devs = {a for a in self._ancestors(deploy_tid, task_by_id)
+                if task_by_id[a].get("owner_agent") == "developer-agent"}
+        if not devs:
+            return False  # nothing to rework in-run → let the caller try a re-plan
+        state["health_rework"] = state.get("health_rework", 0) + 1
+        self._event(state, "monitoring_feedback", "orchestrator-agent", "retry",
+                    summary=f"deploy unhealthy — Level-1 health rework round "
+                            f"{state['health_rework']}: re-dispatching developer subtree "
+                            f"(re-dev → re-deploy → re-monitor)",
+                    blocking_issues=list(issues), retry_count=state["health_rework"])
+        self._apply_rework(state, deploy_tid, task_by_id)  # resets devs + dependents, persists
+        return True
+
+    def _try_feedback_cycle(self, state, issues) -> str:
+        """Level 2 — bounded *cross-run* re-plan. Open a fresh feedback cycle: the
+        product agent folds the open ``backlog.json`` items into updated requirements,
+        the planner regenerates the workplan, and the whole pipeline re-runs to
+        remediate the unhealthy deploy. Returns ``"rerun"`` (re-seeded — caller re-runs
+        the DAG), ``"paused"`` (the re-plan prelude stopped at a human checkpoint),
+        ``"failed"`` (the prelude blocked), or ``"exhausted"`` (the cycle cap is spent,
+        or this is a DAG-only run with no product agent — caller escalates)."""
+        if state.get("feedback_cycle", 0) >= self.max_feedback_cycles:
+            return "exhausted"
+        if not state.get("prompt_driven"):
+            return "exhausted"  # DAG-only run: no product agent to fold the backlog
+        state["feedback_cycle"] = state.get("feedback_cycle", 0) + 1
+        state["health_rework"] = 0  # fresh Level-1 budget for the new cycle
+        self._event(state, "monitoring_feedback", "orchestrator-agent", "retry",
+                    summary=f"opening Level-2 feedback cycle {state['feedback_cycle']} — "
+                            f"re-planning from backlog.json to remediate the unhealthy "
+                            f"deploy", blocking_issues=list(issues),
+                    retry_count=state["feedback_cycle"])
+        # Re-seed: drop the regenerable artifacts + DAG task/stage state so the cycle
+        # rebuilds from updated requirements. requirements.json, backlog.json,
+        # workflow_state.json and events.log.jsonl are kept.
+        self._reseed_artifacts()
+        state["tasks"] = {}
+        state["stages"] = {}
+        self._ensure_task_states(state, PRELUDE_TASKS)
+        state["current_stage"] = "requirement_ingestion"
+        self._persist(state)
+        outcome = self._run_prelude(self._feedback_prompt(state, issues), state)
+        if outcome == "paused":
+            return "paused"
+        if outcome == "failed":
+            return "failed"
+        return "rerun"
+
+    def _feedback_prompt(self, state, issues) -> str:
+        """The synthetic product-agent request that seeds a Level-2 feedback cycle."""
+        bullet = "\n".join(f"  - {i}" for i in issues) or "  - (deploy unhealthy)"
+        return (
+            f"Monitoring feedback cycle {state.get('feedback_cycle', 0)}: the deployed "
+            f"application failed post-deploy health monitoring. UPDATE the existing "
+            f"requirements (artifacts/requirements.json) — do not start from scratch — to "
+            f"add or strengthen acceptance criteria that prevent these runtime failures, "
+            f"and read artifacts/backlog.json for the open remediation items you are "
+            f"addressing. Observed health issues:\n{bullet}"
+        )
+
+    def _reseed_artifacts(self) -> None:
+        """Remove the regenerable pipeline artifacts before a Level-2 feedback cycle so
+        the re-plan rebuilds them from updated requirements and no stale artifact can
+        satisfy a new cycle's gate. requirements.json (product *updates* it),
+        backlog.json (the feedback input), workflow_state.json and events.log.jsonl are
+        deliberately kept. NOTE: keep this list in sync with the pipeline's artifact set
+        (CLAUDE.md / SCHEMA_BY_NAME) when a new stage artifact is added."""
+        for rel in ("artifacts/workplan.json", "artifacts/architecture.json",
+                    "artifacts/api-contracts.json", "artifacts/data-model.json",
+                    "artifacts/code_spec.json", "artifacts/review_report.json",
+                    "artifacts/test_plan.json", "artifacts/release_report.json",
+                    "artifacts/e2e_report.json"):
+            try:
+                (self.project / rel).unlink()
+            except (FileNotFoundError, IsADirectoryError, OSError):
+                pass
+        for rel in ("artifacts/adr", "artifacts/code_spec"):
+            d = self.project / rel
+            if d.is_dir():
+                shutil.rmtree(d, ignore_errors=True)
+
+    def _escalate_monitoring(self, state, issues) -> None:
+        """Both remediation levels are spent and the deploy is still unhealthy: mark the
+        backlog items escalated, close the open cycle, and append a blocked event. The
+        caller then finalizes the run as failed (human hand-off)."""
         path = self.artifacts / "backlog.json"
+        items = self._read_backlog(path)
+        for e in items:
+            if e.get("status") == "open":
+                e["status"] = "escalated"
+        if items:
+            self._write_backlog(path, items)
+        self._event(state, "monitoring_feedback", "orchestrator-agent", "blocked",
+                    summary=f"monitoring feedback loop exhausted after "
+                            f"{state.get('feedback_cycle', 0)} re-plan cycle(s) — deploy "
+                            f"still unhealthy; escalating to a human",
+                    blocking_issues=list(issues))
+
+    # --------------------------------------------------------------------- backlog IO
+    @staticmethod
+    def _read_backlog(path):
         try:
-            existing = json.loads(path.read_text()) if path.exists() else []
+            data = json.loads(path.read_text()) if path.exists() else []
         except (json.JSONDecodeError, OSError):
-            existing = []
-        if not isinstance(existing, list):
-            existing = []
-        existing.append({
-            "id": f"REMEDIATION-{len(existing) + 1}",
-            "source": "monitoring_feedback",
-            "workflow_id": state.get("workflow_id"),
-            "release_verdict": verdict,
-            "issues": list(issues),
-            "created_at": self._ts(),
-        })
+            data = []
+        return data if isinstance(data, list) else []
+
+    def _write_backlog(self, path, items) -> None:
         with self._lock:
             self.artifacts.mkdir(parents=True, exist_ok=True)
             tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(json.dumps(existing, indent=2))
+            tmp.write_text(json.dumps(items, indent=2))
             tmp.replace(path)
+
+    def _append_backlog(self, state, issues, verdict) -> None:
+        """Append a remediation item to ``artifacts/backlog.json`` (atomic write,
+        schema: backlog.schema.json). The durable feedback signal: a future cycle's
+        product agent folds open items into updated requirements (SPEC §3.9)."""
+        path = self.artifacts / "backlog.json"
+        items = self._read_backlog(path)
+        items.append({
+            "id": f"REMEDIATION-{len(items) + 1}",
+            "source": "monitoring_feedback",
+            "workflow_id": state.get("workflow_id"),
+            "feedback_cycle": state.get("feedback_cycle", 0),
+            "release_verdict": verdict if isinstance(verdict, str) else "unknown",
+            "issues": list(issues),
+            "status": "open",
+            "created_at": self._ts(),
+        })
+        self._write_backlog(path, items)
+
+    def _resolve_open_backlog(self, state) -> None:
+        """A deploy came back healthy: close every open backlog item. No-op (and no file
+        created) when there is nothing outstanding, so a normal healthy run never writes
+        a backlog."""
+        path = self.artifacts / "backlog.json"
+        items = self._read_backlog(path)
+        resolved = [e for e in items if e.get("status") == "open"]
+        if not resolved:
+            return
+        ts = self._ts()
+        for e in resolved:
+            e["status"] = "resolved"
+            e["resolved_at"] = ts
+        self._write_backlog(path, items)
+        self._event(state, "monitoring_feedback", "orchestrator-agent", "success",
+                    summary=f"deploy healthy after feedback cycle "
+                            f"{state.get('feedback_cycle', 0)} — {len(resolved)} backlog "
+                            f"item(s) resolved")
 
     # ------------------------------------------------------------------ terminals
     def _finalize_failed(self, state) -> dict:

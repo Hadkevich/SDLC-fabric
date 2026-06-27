@@ -64,7 +64,7 @@ so the audit log cannot be fabricated (`engine.py` `_event`).
 
 ## 2. Lifecycle pipeline + control flow
 
-Stage keys are exactly those in `workflow_state.json` (`STAGE_SEQUENCE`, `engine.py:29`).
+Stage keys are exactly those in `workflow_state.json` (`STAGE_SEQUENCE`, `engine.py:30`).
 
 ```mermaid
 flowchart TD
@@ -76,7 +76,8 @@ flowchart TD
   F["testing_validation<br/>🤖 qa-agent → tests + test_plan.json"]
   G["deployment<br/>🤖 devops-agent → Dockerfile + release_report.json"]
   X["e2e_validation (UI projects only)<br/>🤖 e2e-agent → e2e_report.json<br/>(real browser via Playwright MCP)"]
-  H["monitoring_feedback<br/>🤖 orchestrator-agent → event (+ backlog.json if unhealthy)"]
+  H["monitoring_feedback<br/>🤖 orchestrator-agent → event + backlog.json<br/>bounded two-level feedback loop (SPEC §3.9)"]
+  BL[("backlog.json<br/>remediation signal (schema-validated)")]
   Z(["🟣 complete"])
 
   A --> B --> C --> D --> E
@@ -87,21 +88,26 @@ flowchart TD
   G --> X
   X -->|"verdict ∈ {passed,<br/>passed_with_warnings}"| H
   X -->|"verdict = failed<br/>(bounded rework, 1 round)"| D
-  H --> Z
+  H -->|"healthy → resolve backlog"| Z
 
-  H -.->|"unhealthy → remediation"| BL[("backlog.json<br/>seeds a future run")]
+  %% monitoring_feedback closed loop (enabled when max_feedback_cycles > 0)
+  H -.->|"unhealthy → queue item"| BL
+  H -.->|"Level 1: in-run health rework<br/>(cap 1, re-dev → re-deploy → re-monitor)"| D
+  H -.->|"Level 2: cross-run re-plan<br/>(≤ max_feedback_cycles)"| BL
+  BL -.->|"product folds open items<br/>into updated requirements"| A
 
   A -. "awaiting_approval" .-> GH1{{"👤 requirements"}}
   C -. "awaiting_approval" .-> GH2{{"👤 architecture"}}
-  G -. "awaiting_approval" .-> GH3{{"👤 production_deploy"}}
+  G -. "awaiting_approval" .-> GH3{{"👤 production_deploy<br/>(re-fires on every re-deploy)"}}
 
   E -->|"rework cap hit → escalate"| ESC["👤 Human escalation"]
   D -->|"max_retries hit / unsafe"| ESC
   X -->|"e2e rework cap (1) hit → escalate + backlog"| ESC
+  H -->|"both levels exhausted → escalate<br/>(backlog → escalated)"| ESC
 ```
 
 The three linear pre-DAG stages (product → planner → architect) are modeled as a
-synthetic prelude chain (`PRELUDE_TASKS`, `engine.py:75`); everything from
+synthetic prelude chain (`PRELUDE_TASKS`, `engine.py:80`); everything from
 `code_generation` on is scheduled from the `workplan.json` `depends_on` DAG.
 `e2e_validation` is appended **only for projects with a browser UI** (backend-only
 projects skip it); for full-stack apps the `devops-agent` serves the built UI on the
@@ -112,7 +118,20 @@ e2e-agent in `.claude/settings.json`), maps each browser-facing acceptance crite
 scenario, de-flakes (retries up to 2× before failing), screenshots each, and writes
 `e2e_report.json` (`SPEC.md §3.8`).
 
-**Human checkpoints** (`HUMAN_GATES`, `engine.py:57`) — three mandatory gates the
+**Monitoring & feedback loop** (`SPEC.md §3.9`; `engine.py` `_monitor` + `run()` driver).
+After the DAG completes, the orchestrator folds the deploy's health into a
+`monitoring_feedback` event. A **healthy** deploy completes the run (and resolves any open
+backlog item). An **unhealthy** deploy queues a `backlog.json` item and — when the loop is
+enabled (`--feedback-loop N` / `max_feedback_cycles > 0`) — drives a bounded two-level
+remediation loop: **Level 1** re-dispatches the developer subtree of the deploy in-run
+(`_try_health_rework`, cap `STAGE_REWORK_CAP['monitoring_feedback']` = 1, reusing the rework
+machinery); **Level 2** opens a cross-run cycle (`_try_feedback_cycle`, ≤ `max_feedback_cycles`)
+in which the **product agent folds the open backlog items into updated requirements** and the
+whole pipeline re-runs — closing the brief's Stage-8 → Stage-1 loop. Each re-deploy still
+passes the `production_deploy` checkpoint; when both levels are exhausted the backlog items are
+marked `escalated` and the run fails. Default `max_feedback_cycles = 0` keeps a one-shot signal.
+
+**Human checkpoints** (`HUMAN_GATES`, `engine.py:62`) — three mandatory gates the
 engine blocks on as `awaiting_approval` states and resumes from on `--approve`:
 
 | Gate key | Blocks before | Source |
@@ -131,7 +150,11 @@ engine blocks on as `awaiting_approval` states and resumes from on `--approve`:
 flowchart TD
   S0["load workflow_state.json"] --> S1["topo-sort workplan DAG<br/>_topo_order (Kahn; cycle → Escalation)"]
   S1 --> S2{"pick wave:<br/>tasks whose deps are all 'success'"}
-  S2 -->|"none left"| DONE(["finalize: complete"])
+  S2 -->|"none left"| MON["_monitor: classify deploy health (SPEC §3.9)"]
+  MON -->|"healthy / n-a"| DONE(["finalize: complete<br/>(resolve open backlog)"])
+  MON -.->|"unhealthy → Level-1 health rework<br/>(re-dev → re-deploy, cap 1)"| S2
+  MON -.->|"unhealthy → Level-2 re-plan<br/>(product folds backlog → re-run, ≤ max_feedback_cycles)"| S0
+  MON -->|"both levels exhausted<br/>(backlog → escalated)"| FAIL
   S2 --> GATE{"human gate<br/>on this stage?"}
   GATE -->|"not approved"| PAUSE(["mark awaiting_approval<br/>persist → return"])
   GATE -->|"approved / none"| RUNW["_run_wave:<br/>ThreadPoolExecutor (≤ max_parallel, default 4)<br/>agent runs OUTSIDE the state lock"]
@@ -139,7 +162,7 @@ flowchart TD
   VALID --> KIND{"classify outcome"}
   KIND -->|"ok"| ADV["mark success · stamp event · advance"]
   KIND -->|"recoverable<br/>(schema miss, gate not met, timeout)"| RETRY["_retry: attempt++ with back-off<br/>cap = max_retries (default 3)"]
-  KIND -->|"rework<br/>(review 'rejected' / e2e 'failed')"| RW["_request_rework → _drain_rework<br/>reset developer subtree<br/>cap per stage (STAGE_REWORK_CAP):<br/>code_review 2 · e2e_validation 1"]
+  KIND -->|"rework<br/>(review 'rejected' / e2e 'failed')"| RW["_request_rework → _drain_rework<br/>reset developer subtree<br/>cap per stage (STAGE_REWORK_CAP):<br/>code_review 2 · e2e_validation 1 · monitoring_feedback 1"]
   KIND -->|"unrecoverable<br/>(unsafe, dangerous sink, cap hit)"| BLOCK["_block: status blocked<br/>circuit breaker halts new dispatch"]
   RETRY -->|"under cap"| S2
   RETRY -->|"cap hit"| BLOCK
@@ -153,21 +176,24 @@ Key functions (all in `src/orchestrator/engine.py`):
 
 | Concern | Function | Line |
 |---------|----------|------|
-| Main wave scheduler | `run` | 379 |
-| Concurrent wave execution | `_run_wave` | 450 |
-| Single-task retry/rework/escalate | `_run_task` | 489 |
-| Retry with back-off | `_retry` | 551 |
-| Block + circuit breaker | `_block` | 565 |
-| Bounded review/e2e→fix loop | `_request_rework` / `_drain_rework` / `_apply_rework` | 578 / 603 / 611 |
-| Post-run schema + gate validation | `_check` | 680 |
-| Review verdict gate | `_review_gate` | 712 |
-| Deployment gate | `_deploy_gate` | 744 |
-| E2E (browser) gate | `_e2e_gate` | 770 |
-| Post-deploy feedback fold | `_monitor` | 806 |
-| Human checkpoint block | `_gate_pause` | 466 |
-| Topological sort / cycle detect | `_topo_order` | 282 |
-| Atomic state persist | `_persist` | 173 |
-| Event stamping | `_event` | 184 |
+| Feedback-loop driver (DAG + monitoring) | `run` | 402 |
+| Wave scheduler (done/paused/failed) | `_run_dag` | 468 |
+| Concurrent wave execution | `_run_wave` | 519 |
+| Single-task retry/rework/escalate | `_run_task` | 558 |
+| Retry with back-off | `_retry` | 620 |
+| Block + circuit breaker | `_block` | 634 |
+| Bounded review/e2e→fix loop | `_request_rework` / `_drain_rework` / `_apply_rework` | 647 / 672 / 680 |
+| Post-run schema + gate validation | `_check` | 749 |
+| Review verdict gate | `_review_gate` | 781 |
+| Deployment gate | `_deploy_gate` | 813 |
+| E2E (browser) gate | `_e2e_gate` | 839 |
+| Monitoring fold + classify | `_monitor` | 875 |
+| Feedback loop: Level-1 health rework | `_try_health_rework` | 911 |
+| Feedback loop: Level-2 cross-run re-plan | `_try_feedback_cycle` | 939 |
+| Human checkpoint block | `_gate_pause` | 535 |
+| Topological sort / cycle detect | `_topo_order` | 301 |
+| Atomic state persist | `_persist` | 192 |
+| Event stamping | `_event` | 203 |
 
 **Determinism guarantees (`SPEC.md §8`):** state is persisted with write-temp +
 atomic rename (`_persist`); the slow agent subprocess runs *outside* the `self._lock`
@@ -191,8 +217,9 @@ flowchart LR
     g5["testing_validation ← code_spec.json valid"]
     g6["deployment ← review verdict ∈ {approved, approved_with_comments}<br/>∧ test_plan.summary.failed == 0"]
     g7["e2e_validation (UI only) ← e2e_report.json valid<br/>verdict ∈ {passed, passed_with_warnings} ∧ summary.failed == 0<br/>failed → rework (1 round) → escalate + backlog"]
+    g8["monitoring_feedback (NOT a gate — bounded loop)<br/>healthy → complete · unhealthy → Level-1 health rework (cap 1)<br/>→ Level-2 re-plan (≤ max_feedback_cycles) → escalate"]
   end
-  g1-->g2-->g3-->g4-->g5-->g6-->g7
+  g1-->g2-->g3-->g4-->g5-->g6-->g7-->g8
 ```
 
 **Security baseline is two-tier** (`validation.py` `_DANGEROUS`, `scan_source`):
@@ -200,7 +227,7 @@ code-execution / injection / secret sinks (`eval`, `exec`, `os.system`,
 `subprocess(..., shell=True)`, `child_process`, hard-coded secrets) are an
 **unrecoverable block**; XSS-prone-but-often-legitimate DOM sinks (`innerHTML`,
 `document.write`) are surfaced as **non-blocking warnings** (`SPEC.md §9`). The scan
-runs at the `code_review` gate (`engine.py:696`).
+runs at the `code_review` gate (`engine.py:765`).
 
 ---
 
@@ -223,6 +250,7 @@ next stage runs; where a `.json`/`.md` pair exists, the **JSON is authoritative*
 | testing_validation | qa-agent (sonnet) | tests + `test_plan.json` | `test_plan.schema.json` |
 | deployment | devops-agent (haiku) | `Dockerfile` + `release_report.json` | `release_report.schema.json` |
 | e2e_validation *(UI only)* | e2e-agent (sonnet) | `e2e_report.json` (+ `e2e-screens/*.png`) | `e2e_report.schema.json` |
+| monitoring_feedback | orchestrator-agent | `backlog.json` (on unhealthy deploy) | `backlog.schema.json` |
 | (all) | orchestrator-agent | `workflow_state.json` | `workflow_state.schema.json` |
 | (all, append-only) | every agent | `events.log.jsonl` | `event.schema.json` |
 
