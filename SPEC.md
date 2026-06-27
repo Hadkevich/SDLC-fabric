@@ -79,17 +79,38 @@ A `failed` verdict triggers the **bounded rework loop** (§3.5, §8.3): the orch
 
 ### 3.9 Monitoring & Feedback — `monitoring_feedback`
 Owner: Orchestrator Agent
-Input: the deployment's `release_report.json` (verdict + health checks)
-Output: a `monitoring_feedback` event and, on an unhealthy deploy, remediation items
-appended to `artifacts/backlog.json`
-Success: the system detects an unhealthy deploy, summarizes impact, and queues remediation
-that a future run's product agent can fold into new requirements.
+Input: the deployment's `release_report.json` (verdict + health checks); on a feedback cycle,
+the open items in `artifacts/backlog.json`
+Output: a `monitoring_feedback` event and, on an unhealthy deploy, a remediation item appended
+to `artifacts/backlog.json` (schema: `backlog.schema.json`)
+Success: the system detects an unhealthy deploy, summarizes impact, and **closes the loop** —
+remediating the failure within a bounded number of cycles, or escalating with the failure queued.
 
-> **Status:** implemented as a **minimal** post-deploy feedback pass owned by the
-> orchestrator (`engine.py:_monitor`): after a successful deployment it folds the release
-> health into a `monitoring_feedback` event and queues `backlog.json` remediation when the
-> deploy is unhealthy. It is a feedback *signal*, not a gate — the deploy gate owns go/no-go.
-> A fuller loop (live runtime telemetry, automatic re-planning) remains future work.
+The orchestrator (`engine.py:_monitor` + `run()`) folds the release health into a
+`monitoring_feedback` event. A **healthy** deploy completes the run; any backlog items a prior
+cycle opened are marked `resolved`. An **unhealthy** deploy queues a `backlog.json` item and, when
+the loop is enabled (`max_feedback_cycles > 0`, CLI `--feedback-loop N`), drives a **bounded
+two-level remediation loop**:
+
+- **Level 1 — in-run health rework** (cap `STAGE_REWORK_CAP['monitoring_feedback']` = 1): an
+  unhealthy deploy re-dispatches the developer subtree of the deploy task (re-dev → re-deploy →
+  re-monitor), reusing the §8.3 rework machinery. A post-deploy re-run is expensive, so it is
+  capped at one round — the same rationale as `e2e_validation`.
+- **Level 2 — cross-run re-plan** (cap `max_feedback_cycles`): when the in-run rework doesn't fix
+  it, the orchestrator opens a feedback cycle — the **product agent** folds the open `backlog.json`
+  items into updated requirements, the planner regenerates the workplan, and the whole pipeline
+  re-runs. This closes the brief's Stage-8 → Stage-1 loop.
+
+Each re-deploy still honours the `production_deploy` human checkpoint (§8.6), so the loop is
+automatic but never re-ships to production without the configured sign-off. The loop is bounded by
+`max_feedback_cycles` **and** the run-level cost breaker (§9), which spans all cycles. When both
+levels are exhausted and the deploy is still unhealthy, the backlog items are marked `escalated`,
+a `blocked` event is appended, and the run finalizes `failed` (human hand-off).
+
+> **Status:** implemented (`engine.py`: `_monitor`, `_try_health_rework`, `_try_feedback_cycle`,
+> `_append_backlog`). Default `max_feedback_cycles = 0` keeps the legacy one-shot signal (queue a
+> backlog item, then complete). Live runtime telemetry beyond the deploy's health checks (APM,
+> error-rate alerts) remains future work — the loop here is driven by the post-deploy health probe.
 
 ## 4. Agent Roles
 Nine role-specialized agents are defined in `.claude/agents/`. There is no separate Monitor agent;
@@ -169,6 +190,7 @@ All artifacts must be parseable, versioned (`"spec_version": "v1"`), and schema-
 | `release_report.json` | DevOps | `schemas/release_report.schema.json` |
 | `e2e_report.json` | E2E | `schemas/e2e_report.schema.json` |
 | `workflow_state.json` | Orchestrator | `schemas/workflow_state.schema.json` |
+| `backlog.json` | Orchestrator (monitoring_feedback) | `schemas/backlog.schema.json` |
 | `events.log.jsonl` | all (append-only) | `schemas/event.schema.json` |
 
 **Brief §4 checklist (the five required strict formats).** Every artifact type the brief calls out
@@ -221,12 +243,14 @@ stage without a passing gate, and may not skip validation.
 **8.3 Retry vs. escalate.** Failures are classified:
 - *Recoverable* (schema-validation miss, partial output, transient tool error) → retry with
   back-off up to `max_retries` (default 3).
-- *Reworkable* (review verdict `rejected`, or e2e verdict `failed`) → run a bounded fix loop:
-  re-dispatch the upstream developer subtree with the gate's issues as feedback, then escalate.
-  The cap is **per stage** (`STAGE_REWORK_CAP`, default `max_rework` = 2): `code_review` uses 2,
-  `e2e_validation` uses **1** because a post-deploy re-run is expensive. This is the agent-level
-  "generate → feedback → modify" loop, distinct from a transient retry; on exhaustion the
-  failure is queued to `backlog.json`.
+- *Reworkable* (review verdict `rejected`, e2e verdict `failed`, or an unhealthy `monitoring_feedback`
+  deploy) → run a bounded fix loop: re-dispatch the upstream developer subtree with the gate's issues
+  as feedback, then escalate. The cap is **per stage** (`STAGE_REWORK_CAP`, default `max_rework` = 2):
+  `code_review` uses 2; `e2e_validation` and `monitoring_feedback` use **1** because a post-deploy
+  re-run is expensive. This is the agent-level "generate → feedback → modify" loop, distinct from a
+  transient retry; on exhaustion the failure is queued to `backlog.json`. `monitoring_feedback` adds a
+  second, **cross-run** tier on top of this — a bounded re-plan cycle (`max_feedback_cycles`) that
+  re-runs the product agent against the backlog (§3.9).
 - *Unrecoverable* (security violation, unsatisfiable contract, ambiguous
   requirements, unsafe request) → escalate immediately; do not retry.
 Retries are counted **per task**, not per stage. Rework rounds are counted on the gate task

@@ -97,6 +97,25 @@
             "type": "integer",
             "default": 2
         },
+        "max_feedback_cycles": {
+            "description": "Bounded cross-run re-planning cycles the monitoring_feedback loop may open before escalating (SPEC §3.9). 0 disables the loop (a single feedback signal only).",
+            "type": "integer",
+            "default": 0
+        },
+        "feedback_cycle": {
+            "description": "How many cross-run re-planning cycles (Level 2) the monitoring_feedback loop has opened so far (SPEC §3.9).",
+            "type": "integer",
+            "minimum": 0
+        },
+        "health_rework": {
+            "description": "How many in-run post-deploy health-rework rounds (Level 1) the monitoring_feedback loop has applied in the current cycle (SPEC §3.9). Capped at STAGE_REWORK_CAP['monitoring_feedback'].",
+            "type": "integer",
+            "minimum": 0
+        },
+        "prompt_driven": {
+            "description": "True when this run was started from a raw request (product → planner prelude), so the monitoring_feedback loop knows a product agent exists to re-plan against the backlog (SPEC §3.9). Absent on hand-authored DAG-only runs.",
+            "type": "boolean"
+        },
         "created_at": { "type": "string", "format": "date-time" },
         "updated_at": { "type": "string", "format": "date-time" }
     }

@@ -56,6 +56,7 @@ All paths below are relative to `projects/<project-name>/artifacts/`.
 | `release_report.json` | devops-agent | `schemas/release_report.schema.json` |
 | `e2e_report.json` | e2e-agent | `schemas/e2e_report.schema.json` |
 | `workflow_state.json` | orchestrator-agent | `schemas/workflow_state.schema.json` |
+| `backlog.json` | orchestrator-agent (monitoring_feedback) | `schemas/backlog.schema.json` |
 | `events.log.jsonl` | all agents (append-only) | `schemas/event.schema.json` |
 
 ## Stage gates (must pass before advancing)
@@ -71,6 +72,12 @@ All paths below are relative to `projects/<project-name>/artifacts/`.
   {passed, passed_with_warnings} AND summary.failed == 0; a `failed` verdict triggers a
   bounded developer rework loop **capped at one round** (post-deploy re-runs are
   expensive), then escalates and queues the failure to `backlog.json`
+- `monitoring_feedback` is a feedback loop, not a blocking gate (SPEC §3.9): a healthy deploy
+  completes the run; an unhealthy deploy queues a `backlog.json` item and, when enabled
+  (`--feedback-loop N` / `max_feedback_cycles > 0`), runs a bounded two-level remediation loop —
+  Level 1 in-run health rework (cap 1), then up to N Level-2 cross-run re-plans (the product agent
+  folds the backlog into updated requirements) — each re-deploy still honours `production_deploy`,
+  then escalates. Default (0) keeps the one-shot signal.
 
 ## Workflow Reference
 The agentic loop diagram is at `workflow/mermaid.md`. All agents should use it as the authoritative visual reference for stage sequence, ownership, and escalation paths.
