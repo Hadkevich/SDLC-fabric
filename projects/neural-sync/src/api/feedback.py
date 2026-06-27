@@ -79,6 +79,10 @@ class TeamRiskMember(BaseModel):
     bench_risk_score: float
     burnout_risk_badge: str
     bench_risk_badge: str
+    # Task04-requirements §1 (Mission Objective) third prediction. Null when the
+    # developer has no match record yet (behavioral fit unknown).
+    team_mismatch_probability: Optional[float] = None
+    team_mismatch_badge: Optional[str] = None
 
 
 class TeamRiskDistribution(BaseModel):
@@ -273,6 +277,35 @@ async def get_team_risk_summary(
     # Stable ordering by id so each developer keeps the same display name across requests.
     profiles = sorted(result.scalars().all(), key=lambda d: str(d.id))
 
+    # Behavioral-fit components for the team-mismatch prediction come from each
+    # developer's match against an ASSIGNED project — the project_id of an active
+    # allocation, newest match wins. (Not merely the latest match overall, which could
+    # be against a project the developer is not on.)
+    active_projects: dict = {
+        dev.id: {
+            a.project_id
+            for a in (dev.allocation_records or [])
+            if a.is_active and a.project_id is not None
+        }
+        for dev in profiles
+    }
+    # One query, bounded to the team's developers (not the whole match_records table)
+    # and scanned in timestamp-desc order so the first qualifying hit per developer is
+    # the newest match against one of their assigned projects.
+    match_rows = (
+        await db.execute(
+            select(MatchRecord)
+            .where(MatchRecord.developer_id.in_([dev.id for dev in profiles]))
+            .order_by(MatchRecord.timestamp.desc())
+        )
+    ).scalars().all()
+    assigned_match: dict = {}
+    for m in match_rows:
+        if m.developer_id in assigned_match:
+            continue
+        if m.project_id in active_projects.get(m.developer_id, frozenset()):
+            assigned_match[m.developer_id] = m
+
     members: list[TeamRiskMember] = []
     dist = TeamRiskDistribution()
 
@@ -286,7 +319,12 @@ async def get_team_risk_summary(
             )
             for a in (dev.allocation_records or [])
         ]
-        scores = compute_risk_scores(slices)
+        m = assigned_match.get(dev.id)
+        scores = compute_risk_scores(
+            slices,
+            workstyle_score=m.workstyle_score if m else None,
+            motivation_score=m.motivation_score if m else None,
+        )
 
         display_name = _TEAM_DISPLAY_NAMES[i % len(_TEAM_DISPLAY_NAMES)]
         members.append(
@@ -297,6 +335,8 @@ async def get_team_risk_summary(
                 bench_risk_score=scores.bench_risk_score,
                 burnout_risk_badge=scores.burnout_risk_badge,
                 bench_risk_badge=scores.bench_risk_badge,
+                team_mismatch_probability=scores.team_mismatch_probability,
+                team_mismatch_badge=scores.team_mismatch_badge,
             )
         )
 

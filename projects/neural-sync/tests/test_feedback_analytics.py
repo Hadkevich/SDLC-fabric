@@ -58,7 +58,7 @@ async def test_feedback_stores_record_and_returns_201():
         yield session
 
     def override_user():
-        return TokenPayload(sub=DEV_USER_ID, role="developer")
+        return TokenPayload(sub=DEV_USER_ID, role="developer", developer_profile_id=DEV_USER_ID)
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
@@ -229,7 +229,7 @@ async def test_feedback_nonexistent_match_returns_404():
         yield session
 
     def override_user():
-        return TokenPayload(sub=DEV_USER_ID, role="developer")
+        return TokenPayload(sub=DEV_USER_ID, role="developer", developer_profile_id=DEV_USER_ID)
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
@@ -270,7 +270,7 @@ async def test_feedback_missing_accepted_field_returns_422():
         yield session
 
     def override_user():
-        return TokenPayload(sub=DEV_USER_ID, role="developer")
+        return TokenPayload(sub=DEV_USER_ID, role="developer", developer_profile_id=DEV_USER_ID)
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user

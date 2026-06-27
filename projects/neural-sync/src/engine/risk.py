@@ -41,6 +41,11 @@ class RiskScores:
     burnout_risk_badge: str
     bench_risk_badge: str
     computed_at: datetime
+    # Task04-requirements §1 (Mission Objective) third prediction. Populated only when the developer's
+    # behavioral match scores are supplied (None otherwise — risk can be computed
+    # from allocations alone, before any match exists).
+    team_mismatch_probability: Optional[float] = None
+    team_mismatch_badge: Optional[str] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -190,6 +195,36 @@ def bench_badge(score: float) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Team mismatch probability  (Task04-requirements §1 — third prediction)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_team_mismatch_probability(
+    workstyle_score: float,
+    motivation_score: float,
+) -> float:
+    """Probability that a developer is a *behavioral* mismatch for their assigned
+    team/project.
+
+    Defined as ``1 − mean(workstyle_score, motivation_score)`` — the behavioral-fit
+    gap. Both inputs are the per-developer match components (w2 work-style and
+    w3 motivation) already computed by the matching engine, so this reuses signals
+    the system trusts rather than introducing a new model. Returns a float in [0, 1]
+    (1.0 = total behavioral mismatch).
+    """
+    fit = (float(workstyle_score) + float(motivation_score)) / 2.0
+    return round(min(1.0, max(0.0, 1.0 - fit)), 6)
+
+
+def team_mismatch_badge(score: float) -> str:
+    """low < 0.4 ≤ medium ≤ 0.6 < high"""
+    if score > 0.6:
+        return "high"
+    if score >= 0.4:
+        return "medium"
+    return "low"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Combined risk computation (called by the API route)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -197,14 +232,31 @@ def compute_risk_scores(
     allocations: list[AllocationSlice],
     motivation_alignment_factor: float = 0.0,
     reference_date: Optional[date] = None,
+    workstyle_score: Optional[float] = None,
+    motivation_score: Optional[float] = None,
 ) -> RiskScores:
-    """Compute both risk scores and return a RiskScores dataclass."""
+    """Compute all risk scores and return a RiskScores dataclass.
+
+    ``workstyle_score`` / ``motivation_score`` are the developer's behavioral match
+    components against their current project. When both are provided the team
+    mismatch probability is computed; otherwise those fields stay None (risk is
+    still computable from allocations alone).
+    """
     burnout = compute_burnout_risk(allocations, motivation_alignment_factor)
     bench = compute_bench_risk(allocations, reference_date)
+
+    mismatch: Optional[float] = None
+    mismatch_badge: Optional[str] = None
+    if workstyle_score is not None and motivation_score is not None:
+        mismatch = compute_team_mismatch_probability(workstyle_score, motivation_score)
+        mismatch_badge = team_mismatch_badge(mismatch)
+
     return RiskScores(
         burnout_risk_score=burnout,
         bench_risk_score=bench,
         burnout_risk_badge=burnout_badge(burnout),
         bench_risk_badge=bench_badge(bench),
         computed_at=datetime.now(timezone.utc),
+        team_mismatch_probability=mismatch,
+        team_mismatch_badge=mismatch_badge,
     )

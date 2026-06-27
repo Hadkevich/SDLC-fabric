@@ -19,6 +19,8 @@ class _MockUser:
         self.hashed_password = hash_password("secret")
         self.role = "developer"
         self.is_active = True
+        # login() reads user.developer_profile_id to embed the dev_profile_id JWT claim.
+        self.developer_profile_id = self.id
 
 
 @pytest.fixture

@@ -14,7 +14,7 @@ human-readable explanation **without ever seeing the raw behavioral vectors**.
 - **Auth:** JWT access token + HttpOnly refresh cookie (ADR-002)
 
 > ✅ **Run status:** the recorded pipeline run completes end-to-end —
-> 77/77 tests pass, the review gate caught one contract defect (**BLK-001**) which was
+> 108/108 tests pass (77 at the original recorded run), the review gate caught one contract defect (**BLK-001**) which was
 > fixed and re-approved, and deployment passed: `release_report.json` verdict `success`,
 > the app live in a local Docker container with a passing health check. See
 > `../../EVALUATION.md`. The setup below runs the same app locally.
@@ -250,9 +250,11 @@ pytest                 # config in pytest.ini (asyncio auto mode)
 pytest --cov=src       # with coverage
 ```
 
-The recorded QA run: **77/77 passing, 0 failing**, all 13 acceptance criteria covered —
-including the good-match (score ≥ 0.75) and skill-only-trap (score ≤ 0.45) signature
-cases. Details in [`artifacts/test_plan.json`](artifacts/test_plan.json).
+The current QA suite: **108/108 passing, 0 failing** (77 at the original recorded run;
++31 from later operator-profile, team-mismatch, skill-alias, and profile-enrichment
+work), all 13 acceptance criteria covered — including the good-match (score ≥ 0.75) and
+skill-only-trap (score ≤ 0.45) signature cases. Details in
+[`artifacts/test_plan.json`](artifacts/test_plan.json).
 
 ---
 

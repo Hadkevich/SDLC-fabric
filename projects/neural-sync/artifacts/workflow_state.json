@@ -264,5 +264,8 @@
   "halted": false,
   "max_retries": 3,
   "created_at": "2026-06-26T18:12:19Z",
-  "updated_at": "2026-06-27T13:24:42Z"
+  "updated_at": "2026-06-27T23:21:18Z",
+  "max_feedback_cycles": 0,
+  "feedback_cycle": 0,
+  "health_rework": 0
 }

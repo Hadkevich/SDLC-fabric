@@ -739,10 +739,10 @@
     }
   ],
   "summary": {
-    "total": 77,
-    "passed": 77,
+    "total": 108,
+    "passed": 108,
     "failed": 0,
     "skipped": 0,
-    "coverage_note": "All 13 acceptance criteria (AC1–AC13) are covered by at least one test case. Good-match expected range: score >= 0.75 (TC-001). Bad-match expected range: score <= 0.45 (TC-002)."
+    "coverage_note": "Count regenerated 2026-06-28 by re-running the full suite (was 77 at the original recorded run; +31 from later operator-profile, team-mismatch, skill-alias, and profile-enrichment work). All 13 acceptance criteria (AC1–AC13) are covered by at least one test case. Good-match expected range: score >= 0.75 (TC-001). Bad-match expected range: score <= 0.45 (TC-002)."
   }
 }

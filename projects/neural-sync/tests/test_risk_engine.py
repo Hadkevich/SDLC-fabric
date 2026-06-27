@@ -21,6 +21,8 @@ from src.engine.risk import (
     compute_bench_risk,
     compute_burnout_risk,
     compute_risk_scores,
+    compute_team_mismatch_probability,
+    team_mismatch_badge,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -300,3 +302,41 @@ def test_compute_risk_scores_no_allocations():
     assert result.bench_risk_score == 1.0
     assert result.burnout_risk_badge == "low"
     assert result.bench_risk_badge == "high"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Team mismatch probability  (Task04-requirements §1 — third prediction)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_team_mismatch_high_when_behavioral_fit_low():
+    """Opposing behavioral fit → mismatch probability high (badge 'high')."""
+    score = compute_team_mismatch_probability(workstyle_score=0.1, motivation_score=0.15)
+    assert score > 0.6
+    assert team_mismatch_badge(score) == "high"
+
+
+def test_team_mismatch_low_when_behavioral_fit_high():
+    """Strong behavioral fit → mismatch probability low (badge 'low')."""
+    score = compute_team_mismatch_probability(workstyle_score=0.9, motivation_score=0.85)
+    assert score < 0.4
+    assert team_mismatch_badge(score) == "low"
+
+
+def test_team_mismatch_is_one_minus_mean_fit():
+    """Probability is exactly 1 - mean(workstyle, motivation), clamped to [0,1]."""
+    assert compute_team_mismatch_probability(0.6, 0.4) == pytest.approx(0.5)
+    assert compute_team_mismatch_probability(1.0, 1.0) == 0.0
+    assert compute_team_mismatch_probability(0.0, 0.0) == 1.0
+
+
+def test_compute_risk_scores_populates_mismatch_only_when_scores_given():
+    """team_mismatch is None unless both behavioral component scores are supplied."""
+    none_result = compute_risk_scores([], reference_date=TODAY)
+    assert none_result.team_mismatch_probability is None
+    assert none_result.team_mismatch_badge is None
+
+    with_scores = compute_risk_scores(
+        [], reference_date=TODAY, workstyle_score=0.2, motivation_score=0.2
+    )
+    assert with_scores.team_mismatch_probability == pytest.approx(0.8)
+    assert with_scores.team_mismatch_badge == "high"

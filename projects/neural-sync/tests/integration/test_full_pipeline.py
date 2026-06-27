@@ -110,7 +110,7 @@ async def test_match_response_schema_valid_ac1():
         yield session
 
     def override_user():
-        return TokenPayload(sub=DEV_USER_ID, role="developer")
+        return TokenPayload(sub=DEV_USER_ID, role="developer", developer_profile_id=DEV_USER_ID)
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
@@ -201,7 +201,7 @@ async def test_match_endpoint_latency_under_500ms_ac1():
             yield session
 
         def override_user():
-            return TokenPayload(sub=DEV_USER_ID, role="developer")
+            return TokenPayload(sub=DEV_USER_ID, role="developer", developer_profile_id=DEV_USER_ID)
 
         app.dependency_overrides[get_db] = override_db
         app.dependency_overrides[get_current_user] = override_user
@@ -273,7 +273,7 @@ async def test_developer_dashboard_returns_at_least_one_match_card_ac7():
         yield session
 
     def override_user():
-        return TokenPayload(sub=str(TEST_DEV_ID), role="developer")
+        return TokenPayload(sub=str(TEST_DEV_ID), role="developer", developer_profile_id=str(TEST_DEV_ID))
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
@@ -394,7 +394,7 @@ async def test_developer_profile_response_excludes_raw_vectors_ac8():
 
     def override_user():
         # Developer accessing their own profile
-        return TokenPayload(sub=str(TEST_DEV_ID), role="developer")
+        return TokenPayload(sub=str(TEST_DEV_ID), role="developer", developer_profile_id=str(TEST_DEV_ID))
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
@@ -459,7 +459,7 @@ async def test_full_pipeline_end_to_end_ac13():
         yield session
 
     def override_user():
-        return TokenPayload(sub=DEV_USER_ID, role="developer")
+        return TokenPayload(sub=DEV_USER_ID, role="developer", developer_profile_id=DEV_USER_ID)
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
@@ -546,7 +546,7 @@ async def test_full_pipeline_match_then_feedback_ac13():
         yield match_session
 
     def override_user_dev():
-        return TokenPayload(sub=DEV_USER_ID, role="developer")
+        return TokenPayload(sub=DEV_USER_ID, role="developer", developer_profile_id=DEV_USER_ID)
 
     app.dependency_overrides[get_db] = override_db_match
     app.dependency_overrides[get_current_user] = override_user_dev
@@ -635,7 +635,7 @@ async def test_match_missing_required_field_returns_422():
         yield session
 
     def override_user():
-        return TokenPayload(sub=DEV_USER_ID, role="developer")
+        return TokenPayload(sub=DEV_USER_ID, role="developer", developer_profile_id=DEV_USER_ID)
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
@@ -689,7 +689,7 @@ async def test_match_work_style_wrong_length_returns_422():
         yield session
 
     def override_user():
-        return TokenPayload(sub=DEV_USER_ID, role="developer")
+        return TokenPayload(sub=DEV_USER_ID, role="developer", developer_profile_id=DEV_USER_ID)
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user

@@ -82,6 +82,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", help="override the model for all agents (e.g. sonnet, opus)")
     p.add_argument("--schemas-dir", default=str(DEFAULT_SCHEMAS_DIR),
                    help="directory of JSON schemas (default: repo schemas/)")
+    p.add_argument("--cost-report", action="store_true",
+                   help="fold the project's events.log.jsonl into a per-agent-role "
+                        "cost/efficiency report (artifacts/cost_report.{json,md}) and "
+                        "exit — no agent is invoked (no LLM/cost)")
     return p
 
 
@@ -155,6 +159,17 @@ def main(argv=None) -> int:
                   f"       pass --prompt \"...\" to start a new workflow there.",
                   file=sys.stderr)
             return 1
+
+    # Read-only observability: fold the event log into a cost/efficiency report and
+    # exit (mirrors --replay in that no agent/runner is constructed).
+    if args.cost_report:
+        from .cost_reporter import write_cost_report
+        report = write_cost_report(project, REPO_ROOT)
+        t = report["totals"]
+        print(f"cost report → {project / 'artifacts' / 'cost_report.json'} "
+              f"(+ .md)\n  total ${t['cost_usd']:.4f} · {t['total_tokens']:,} tokens · "
+              f"{t['duration_ms'] / 1000:.0f}s across {len(report['by_agent_role'])} roles")
+        return 0
 
     approvals = ALL_APPROVALS if args.yes else {
         a.strip() for a in args.approve.split(",") if a.strip()

@@ -246,6 +246,16 @@ class Orchestrator:
     def _over_budget(self) -> bool:
         return self.max_cost_usd is not None and self._total_cost() >= self.max_cost_usd
 
+    def _write_cost_report(self) -> None:
+        """Best-effort: fold the event log into artifacts/cost_report.{json,md} when a
+        run finalizes (scorecard §7.1 — auto-collected). Pure observability, so it must
+        never raise and break a completed run."""
+        try:
+            from .cost_reporter import write_cost_report
+            write_cost_report(self.project)
+        except Exception:
+            pass
+
     @staticmethod
     def _extract_metrics(result):
         """Pull cost / token / duration figures out of an agent runner's return
@@ -463,6 +473,7 @@ class Orchestrator:
         state["current_stage"] = "complete"
         state["halted"] = False
         self._persist(state)
+        self._write_cost_report()
         return state
 
     def _run_dag(self, state, task_by_id, order) -> str:
@@ -1079,6 +1090,7 @@ class Orchestrator:
         state["current_stage"] = "failed"
         state["halted"] = True  # circuit breaker: stop dispatching new work
         self._persist(state)
+        self._write_cost_report()  # failed runs burned cost too — report it
         return state
 
     def _minimal_failed_state(self) -> dict:
@@ -1103,4 +1115,5 @@ class Orchestrator:
         self._event(state, stage, "orchestrator-agent", "blocked",
                     summary=str(esc), blocking_issues=esc.issues)
         self._persist(state)
+        self._write_cost_report()  # failed runs burned cost too — report it
         return state

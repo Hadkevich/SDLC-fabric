@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CostEfficiencyReport",
+  "description": "Per-agent-role rollup of token / cost / duration spend, folded from a project's events.log.jsonl metrics. Derived observability report (scorecard §7.1) — not a pipeline gate.",
+  "type": "object",
+  "required": ["report_generated_at", "by_agent_role", "totals"],
+  "properties": {
+    "workflow_id": { "type": ["string", "null"] },
+    "report_generated_at": { "type": "string", "format": "date-time" },
+    "by_agent_role": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["total_cost_usd", "total_tokens", "event_count", "coverage"],
+        "properties": {
+          "model": { "type": ["string", "null"] },
+          "total_cost_usd": { "type": "number", "minimum": 0 },
+          "input_tokens": { "type": "integer", "minimum": 0 },
+          "output_tokens": { "type": "integer", "minimum": 0 },
+          "total_tokens": { "type": "integer", "minimum": 0 },
+          "total_duration_ms": { "type": "number", "minimum": 0 },
+          "event_count": { "type": "integer", "minimum": 0 },
+          "events_with_metrics": { "type": "integer", "minimum": 0 },
+          "coverage": { "type": "string", "enum": ["full", "partial", "none"] }
+        }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "required": ["cost_usd", "total_tokens"],
+      "properties": {
+        "cost_usd": { "type": "number", "minimum": 0 },
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "total_tokens": { "type": "integer", "minimum": 0 },
+        "duration_ms": { "type": "number", "minimum": 0 },
+        "event_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "notes": { "type": "array", "items": { "type": "string" } }
+  }
+}

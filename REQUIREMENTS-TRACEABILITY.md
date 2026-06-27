@@ -38,7 +38,10 @@ schema-wins rule stated in §1).
 | 2.4 | Agent runtime + memory layer + tooling layer | ✅ | Runtime: `runners.py` `ClaudeAgentRunner` (spawns `claude --agent <role>`). Memory: artifact files + event log. Tooling: per-agent least-privilege tool lists |
 | S2.a | *Stretch:* multi-agent parallelization | 🟡 | Engine runs independent tasks concurrently (`_run_wave`, `ThreadPoolExecutor`, `max_parallel`). Caveat: confirm parallel developer tasks write **task-scoped** `code_spec/<task_id>.json` (planner rule, `planner.agent.md`) so outputs don't collide — see `EVALUATION.md` |
 | S2.b | *Stretch:* self-improving / feedback loop | ✅ | Bounded fix loops at three points: a rejected review and a failed e2e run (`_request_rework`/`_drain_rework`/`_apply_rework`; per-stage cap `STAGE_REWORK_CAP` — review 2, e2e 1), **and a closed `monitoring_feedback` loop** — an unhealthy deploy drives a Level-1 in-run health rework (cap 1) then up to `max_feedback_cycles` Level-2 cross-run re-plans where the **product agent folds `backlog.json` into updated requirements** (`engine.py:_try_health_rework`/`_try_feedback_cycle`/`_append_backlog`; `--feedback-loop N`; default 0 = signal only). Live runtime telemetry beyond the deploy health probe (APM/error-rate) remains future work (`SPEC.md §3.9`) |
-| S2.c | *Stretch:* cost/performance optimization | ✅ | Per-role model strategy (opus/sonnet/haiku, `SPEC.md §4`); per-task cost/token metrics folded from the event log; optional `max_cost_usd` breaker (`SPEC.md §9`) |
+| S2.c | *Stretch:* cost/performance optimization | ✅ | Per-role model strategy (opus/sonnet/haiku, `SPEC.md §4`); per-task cost/token metrics folded from the event log; optional `max_cost_usd` breaker (`SPEC.md §9`). Full Cost & Efficiency write-up → [`COST-EFFICIENCY.md`](COST-EFFICIENCY.md) |
+| 7.1 | *Scorecard:* auto-collected tokens/cost/time per agent role | ✅ | `cost_reporter.py` folds `events.log.jsonl` → `artifacts/cost_report.{json,md}` (auto at run finalization + `--cost-report`); schema `schemas/cost_report.schema.json`. Recorded run total **$16.51** / 16.2M tok / 5611s |
+| 7.2 | *Scorecard:* different models per role (routing in code) | ✅ | opus (architect, reviewer) · sonnet (developer/planner/product/qa/e2e/orchestrator) · haiku (devops), pinned in `.claude/agents/*.agent.md` frontmatter (`SPEC.md §4`) |
+| 7.3 | *Scorecard:* A/B evidence cheaper model is good enough | ✅ | Live micro-A/B (`scripts/cost_ab_experiment.py`) runs the "log summarizer" task across haiku/sonnet/opus → `artifacts/cost_ab_experiment.{json,md}` |
 | S2.d | *Stretch:* Git integration (agent-driven PRs) | ❌ | Not implemented; deploy is local-Docker. Candidate next step |
 
 ### Phase 3 — Prove It Works (end-to-end demo)
@@ -52,7 +55,7 @@ The demo project is **`projects/neural-sync/`** — the Task-04 NEURAL SYNC app
 | 3.2 | Requirements generated internally | ✅ | `projects/neural-sync/artifacts/requirements.json` + `.md` (product-agent) |
 | 3.3 | Architecture defined by agent | ✅ | `artifacts/architecture.json`, `api-contracts.json`, `data-model.json`, `adr/adr-001..004.json` (architect-agent) |
 | 3.4 | Code generated | ✅ | `projects/neural-sync/src/**` + `frontend/src/**`; `artifacts/code_spec.json` |
-| 3.5 | Tests created & executed | ✅ | `artifacts/test_plan.json` — **77/77 pass, 0 failed**, all 13 acceptance criteria covered |
+| 3.5 | Tests created & executed | ✅ | `artifacts/test_plan.json` — **108/108 pass, 0 failed** (77 at the original recorded run), all 13 acceptance criteria covered |
 | 3.6 | Deployment automated (local or cloud) | ✅ | DevOps path builds the Dockerfile, runs a hardened local container, and health-checks it → `release_report.json` verdict `success` (`environment: local`, live URL, HTTP health check `pass`, image retained as rollback handle). Gate passed: review `approved_with_comments` + tests `failed == 0` |
 | 3.7 | Deployed app validated in a real browser *(extra, beyond brief)* | 🟡 | `e2e_validation` stage (`e2e-agent` + Playwright MCP) drives the live UI per acceptance criterion → `e2e_report.json` (`SPEC.md §3.8`; schema `schemas/e2e_report.schema.json`; example `artifacts/e2e_report.example.json`). **Caveat:** the run now reaches deployment and the app is live, but the browser stage has not yet been exercised end-to-end on the demo — capability exists; it is the immediate next step (`EVALUATION.md` → Known limitations) |
 
@@ -61,7 +64,7 @@ The demo project is **`projects/neural-sync/`** — the Task-04 NEURAL SYNC app
 | # | Criterion | Status | Evidence |
 |---|-----------|:------:|----------|
 | 4.1 | ≥80% of runs without human intervention | ✅ | The workflow reaches `complete`; agents run every stage's content. Human input was limited to the **3 designed checkpoints** (requirements, architecture, `production_deploy` — `HUMAN_GATES`) plus fixing the review-caught BLK-001 and re-running the deploy stage — well within the ≥80%-autonomous bar. Engine also supports fully unattended `--yes` runs |
-| 4.2 | Artifacts consistent (QA-generated tests pass) | ✅ | `test_plan.json` 77/77 pass; every required artifact present and schema-valid in `projects/neural-sync/artifacts/` |
+| 4.2 | Artifacts consistent (QA-generated tests pass) | ✅ | `test_plan.json` 108/108 pass (77 at the recorded run); every required artifact present and schema-valid in `projects/neural-sync/artifacts/` |
 | 4.3 | Recover from ≥2 simulated failures | ✅ | Two classes recovered: (a) transient timeouts — developer + QA agents timed out at 1800 s and recovered on re-dispatch (`events.log.jsonl`); (b) quality rejection — the review gate caught BLK-001, it was fixed, and the deploy re-run passed (§3 / `EVALUATION.md`). The autonomous fix loop is wired (`_request_rework`/`_drain_rework`, per-stage `STAGE_REWORK_CAP`) |
 | 4.4 | Re-run with modified requirements | ✅ | Each run is keyed by `workflow_id`; product-agent supports update mode; `--replay` re-validates prior outputs (`runners.py` `ReplayRunner`) |
 
@@ -139,8 +142,9 @@ Evidence paths are under `projects/neural-sync/`.
 - **Control plane (Phase 1 + 2):** strong and complete — deterministic engine,
   schema-gated handoffs, event-sourced state, least-privilege model-diverse fleet,
   bounded retry + rework + escalation. This is the core of the submission.
-- **Demo (Phase 3):** the NEURAL SYNC app is real and substantial, QA is green (77/77),
-  and the **recorded run completes end-to-end** to `current_stage: "complete"`. The review
+- **Demo (Phase 3):** the NEURAL SYNC app is real and substantial, QA is green (108/108;
+  77 at the recorded run), and the **recorded run completes end-to-end** to
+  `current_stage: "complete"`. The review
   gate caught a legitimate contract violation (BLK-001); it was fixed, the reviewer
   re-approved, and deployment passed (`release_report.json` verdict `success`, live local
   container). The honest claim is "built through review + QA by agents, caught its own

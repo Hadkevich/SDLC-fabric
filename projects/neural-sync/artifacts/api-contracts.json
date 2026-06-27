@@ -1744,6 +1744,17 @@
             "type": "string",
             "format": "date-time",
             "description": "Timestamp of score computation"
+          },
+          "team_mismatch_probability": {
+            "type": ["number", "null"],
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Behavioral-mismatch probability for the assigned team/project: 1 − mean(workstyle_score, motivation_score) of the developer's latest match. Null when no match record exists. Score > 0.6 triggers 'high' badge."
+          },
+          "team_mismatch_badge": {
+            "type": ["string", "null"],
+            "enum": ["low", "medium", "high", null],
+            "description": "low: score < 0.4; medium: 0.4 ≤ score ≤ 0.6; high: score > 0.6. Null when probability is null."
           }
         }
       },
@@ -1752,10 +1763,13 @@
         "required": ["developer_id", "burnout_risk_badge", "bench_risk_badge", "burnout_risk_score", "bench_risk_score"],
         "properties": {
           "developer_id": { "type": "string", "format": "uuid" },
+          "display_name": { "type": "string" },
           "burnout_risk_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
           "bench_risk_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
           "burnout_risk_badge": { "type": "string", "enum": ["low", "medium", "high"] },
-          "bench_risk_badge": { "type": "string", "enum": ["low", "medium", "high"] }
+          "bench_risk_badge": { "type": "string", "enum": ["low", "medium", "high"] },
+          "team_mismatch_probability": { "type": ["number", "null"], "minimum": 0.0, "maximum": 1.0 },
+          "team_mismatch_badge": { "type": ["string", "null"], "enum": ["low", "medium", "high", null] }
         }
       },
       "TeamRiskDistribution": {

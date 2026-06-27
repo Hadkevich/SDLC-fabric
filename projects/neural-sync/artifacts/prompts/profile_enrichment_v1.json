@@ -1,0 +1,18 @@
+{
+  "prompt_key": "profile_enrichment",
+  "version": 1,
+  "model_name": "gemini-2.5-flash",
+  "description": "Version 1 of the profile-enrichment prompt (Task04-requirements §3.1). Converts raw operator text — CV, Git logs, Slack messages — into the structured vectors the matching engine consumes. The model MUST return strict JSON only.",
+  "placeholders": ["cv_text", "git_log_text", "slack_text"],
+  "system_prompt": "You are a workforce-intelligence extractor. From raw operator text you infer a structured developer profile. You output STRICT JSON only — no prose, no markdown fences. All vector values are floats in [0.0, 1.0].",
+  "template_text": "Extract a structured profile from the operator's raw text below.\n\n=== CV / RESUME ===\n{cv_text}\n\n=== GIT ACTIVITY ===\n{git_log_text}\n\n=== SLACK / COMMS ===\n{slack_text}\n\nReturn STRICT JSON with exactly these keys:\n{{\n  \"skills\": [lowercase canonical tech skills, e.g. \"python\", \"react\", \"ml\"],\n  \"work_style\": [8 floats in 0..1 for: collaboration, autonomy, structure, innovation, pace, communication, risk_tolerance, remote_preference],\n  \"motivation_vector\": [8 floats in 0..1 for: impact, growth, compensation, stability, creativity, recognition, autonomy, mission_alignment],\n  \"career_goals\": [short phrases the operator wants next, e.g. \"move to ML\", \"lead role\"]\n}}\n\nInfer each dimension from behavioral signals in the text (async/remote working, leadership/mentoring, research vs delivery, shipping cadence, stability vs novelty). Output JSON ONLY.",
+  "output_schema": {
+    "skills": "list[str]",
+    "work_style": "list[float] (len 8, 0..1)",
+    "motivation_vector": "list[float] (len 8, 0..1)",
+    "career_goals": "list[str]"
+  },
+  "created_at": "2026-06-28T00:00:00Z",
+  "artifact_ref": "artifacts/prompts/profile_enrichment_v1.json",
+  "created_by": "developer-agent"
+}

@@ -310,12 +310,15 @@ def test_weight_change_causes_deterministic_score_delta():
     increasing w1 (skill weight) at the expense of w2 (behavioural) must
     decrease the overall match score.
     """
-    # Bad-match component scores: skill ≈ 0, workstyle ≈ 0.03, timezone ≈ 0
+    # Profile pair with zero skill overlap (a Java dev vs the Python project) but
+    # strongly aligned behavioral fit (work-style, motivation, timezone) against the
+    # GOOD project — so the behavioral dimensions dominate the score. Shifting weight
+    # from behavioural (w2/w3/w4) to skill (w1) must therefore decrease the score.
     skill, ws, mot, tz, growth = _compute_all_scores(
-        BAD_DEV_SKILLS, BAD_DEV_EXP, BAD_DEV_WORK_STYLE, BAD_DEV_MOTIVATION,
-        BAD_DEV_TIMEZONE, BAD_DEV_GOALS,
-        BAD_PROJ_SKILLS, BAD_PROJ_TEAM, BAD_PROJ_WORKLOAD, BAD_PROJ_INNOVATION,
-        BAD_PROJ_TZ_REQ, BAD_PROJ_GROWTH,
+        BAD_DEV_SKILLS, GOOD_DEV_EXP, GOOD_DEV_WORK_STYLE, GOOD_DEV_MOTIVATION,
+        GOOD_DEV_TIMEZONE, GOOD_DEV_GOALS,
+        GOOD_PROJ_SKILLS, GOOD_PROJ_TEAM, GOOD_PROJ_WORKLOAD, GOOD_PROJ_INNOVATION,
+        GOOD_PROJ_TZ_REQ, GOOD_PROJ_GROWTH,
     )
 
     # Default weights
@@ -338,6 +341,39 @@ def test_weight_change_causes_deterministic_score_delta():
         f"decrease by ≥ 0.04. Got delta={delta:.4f} "
         f"(default={score_default:.4f}, skill_heavy={score_skill_heavy:.4f}). "
         f"Component scores: skill={skill:.3f}, ws={ws:.3f}, mot={mot:.3f}"
+    )
+
+
+def test_weight_change_moves_score_for_low_fit_candidate():
+    """
+    [AC6] Weight-sensitivity must also hold for a genuinely LOW-fit candidate (the
+    all-low BAD pair). Here every dimension is weak, so the absolute delta is small;
+    we assert *direction* — shifting weight onto the (near-zero) skill dimension and
+    off the slightly-higher behavioural dimensions still strictly lowers the score.
+    This preserves the coverage the primary AC6 test dropped when its inputs were
+    changed to a behaviourally-strong pair (post motivation-centering).
+    """
+    skill, ws, mot, tz, growth = _compute_all_scores(
+        BAD_DEV_SKILLS, BAD_DEV_EXP, BAD_DEV_WORK_STYLE, BAD_DEV_MOTIVATION,
+        BAD_DEV_TIMEZONE, BAD_DEV_GOALS,
+        BAD_PROJ_SKILLS, BAD_PROJ_TEAM, BAD_PROJ_WORKLOAD, BAD_PROJ_INNOVATION,
+        BAD_PROJ_TZ_REQ, BAD_PROJ_GROWTH,
+    )
+    score_default = compute_match_score(
+        w1=0.30, w2=0.25, w3=0.20, w4=0.15, w5=0.10,
+        skill_score=skill, workstyle_score=ws,
+        motivation_score=mot, timezone_score=tz, growth_score=growth,
+    )
+    score_skill_heavy = compute_match_score(
+        w1=0.70, w2=0.10, w3=0.10, w4=0.05, w5=0.05,
+        skill_score=skill, workstyle_score=ws,
+        motivation_score=mot, timezone_score=tz, growth_score=growth,
+    )
+    assert score_skill_heavy < score_default, (
+        f"[AC6] Re-weighting must still move a low-fit candidate's score in the "
+        f"expected direction. default={score_default:.4f}, "
+        f"skill_heavy={score_skill_heavy:.4f}, components "
+        f"skill={skill:.3f} ws={ws:.3f} mot={mot:.3f}"
     )
 
 
@@ -374,6 +410,24 @@ def test_skill_score_bounded_0_1():
         15,
     )
     assert 0.0 <= score <= 1.0
+
+
+def test_skill_score_matches_spelling_variants_via_aliases():
+    """Semantic-hybrid: equivalent spellings score identically to the canonical match
+    (react ≈ react.js, ml ≈ machine learning, postgres ≈ postgresql)."""
+    # A spelling variant covers the requirement exactly like the canonical token.
+    assert compute_skill_score(["React.js"], ["React"], 10) == compute_skill_score(["React"], ["React"], 10)
+    assert compute_skill_score(["reactjs"], ["react"], 10) == compute_skill_score(["react"], ["react"], 10)
+    assert compute_skill_score(["Machine Learning"], ["ML"], 10) == compute_skill_score(["ML"], ["ML"], 10)
+    assert compute_skill_score(["postgresql"], ["Postgres"], 10) == compute_skill_score(["postgres"], ["postgres"], 10)
+    # …and that canonical match is near-perfect.
+    assert compute_skill_score(["React.js"], ["React"], 10) > 0.90
+
+
+def test_skill_aliases_do_not_invent_cross_language_matches():
+    """Normalization must not create false matches between unrelated skills."""
+    assert compute_skill_score(["Java"], ["Python"], 5) == 0.0
+    assert compute_skill_score(["Go"], ["React"], 5) == 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,56 @@
+{
+  "experiment": "log_summarizer_model_ab",
+  "generated_at": "2026-06-27T22:42:38.155813+00:00",
+  "task": "Summarize the neural-sync SDLC event log into 3 bullets",
+  "models": [
+    "haiku",
+    "sonnet",
+    "opus"
+  ],
+  "results": [
+    {
+      "model": "haiku",
+      "resolved_models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "output": "- **8 distinct stages ran**: requirement_ingestion \u2192 task_decomposition \u2192 planning_architecture \u2192 code_generation \u2192 code_review \u2192 testing_validation \u2192 deployment \u2192 monitoring_feedback.\n\n- **Retries and blocks**: code_generation timed out once then recovered; code_review failed 3 times (missing artifact, JSON error, security baseline) before success; testing_validation timed out once then recovered; deployment blocked 3\u00d7 on rejected review verdict; monitoring_feedback failed initial health check.\n\n- **Final outcome**: SUCCESS\u2014deployment completed (2026-06-27T13:24:01Z) and monitoring health checks passed (1/1 passed).",
+      "input_tokens": 9,
+      "output_tokens": 824,
+      "cache_read_input_tokens": 16491,
+      "cache_creation_input_tokens": 16376,
+      "cost_usd": 0.044748100000000006,
+      "duration_ms": 36713,
+      "is_error": false
+    },
+    {
+      "model": "sonnet",
+      "resolved_models": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-4-6"
+      ],
+      "output": "- **7 distinct stages ran**: requirement_ingestion, task_decomposition, planning_architecture, code_generation, code_review, testing_validation, deployment, and monitoring_feedback (8 if counting monitoring_feedback separately).\n- **Retries and blocks occurred in 4 stages**: code_generation timed out once (retry 1); code_review had 2 retries for missing artifact, then blocked twice more for a hard-coded secret and repeated \"rejected\" verdicts (3 blocks total across the deployment gate); testing_validation timed out once (retry 1); deployment was blocked 3 times by a \"rejected\" review verdict before ultimately passing.\n- **Final outcome: success** \u2014 deployment completed after the review gate was cleared, with 2 consecutive healthy health checks logged by the orchestrator.",
+      "input_tokens": 2,
+      "output_tokens": 182,
+      "cache_read_input_tokens": 15934,
+      "cache_creation_input_tokens": 16324,
+      "cost_usd": 0.1117032,
+      "duration_ms": 39626,
+      "is_error": false
+    },
+    {
+      "model": "opus",
+      "resolved_models": [
+        "claude-haiku-4-5-20251001",
+        "claude-opus-4-8"
+      ],
+      "output": "- **Stages run:** 8 distinct stages executed \u2014 requirement_ingestion, task_decomposition, planning_architecture, code_generation, code_review, testing_validation, deployment, and monitoring_feedback.\n- **Retries & blocks:** code_generation and testing_validation each hit one timeout retry; code_review retried repeatedly (missing/invalid review_report.json) and was blocked once on a possible hard-coded secret; deployment was blocked 3 times on a \"rejected\" review verdict, and monitoring_feedback logged one unhealthy-deploy failure (remediation queued to backlog).\n- **Final outcome:** after rework, code_review passed, deployment (T-08-DEPLOY) completed successfully, and monitoring_feedback confirmed the deploy healthy \u2014 the run finished green.",
+      "input_tokens": 5144,
+      "output_tokens": 576,
+      "cache_read_input_tokens": 14157,
+      "cache_creation_input_tokens": 12750,
+      "cost_usd": 0.1809165,
+      "duration_ms": 35331,
+      "is_error": false
+    }
+  ]
+}

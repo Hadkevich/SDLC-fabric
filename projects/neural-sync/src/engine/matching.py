@@ -67,6 +67,38 @@ def _center(v: list[float], midpoint: float = 0.5) -> list[float]:
 # Skill score  (AC1)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Curated skill aliases → canonical form. Deterministic, dependency-free semantic
+# normalization so equivalent spellings match (the idea-brief's `react ≈ react.js`,
+# `ml ≈ machine learning`). Applied before the set overlap in compute_skill_score,
+# so it never invents cross-language matches (Java still ≠ Python).
+_SKILL_ALIASES: dict[str, str] = {
+    "react.js": "react", "reactjs": "react", "react js": "react",
+    "machine learning": "ml", "machine-learning": "ml",
+    "artificial intelligence": "ai",
+    "postgresql": "postgres", "postgres sql": "postgres", "psql": "postgres",
+    "kubernetes": "k8s",
+    "javascript": "js", "ecmascript": "js",
+    "typescript": "ts",
+    "node.js": "node", "nodejs": "node", "node js": "node",
+    "python3": "python", "py": "python",
+    "golang": "go",
+    "tensorflow": "tf",
+    "pytorch": "torch",
+    "c sharp": "csharp", "c#": "csharp",
+    "c plus plus": "cpp", "c++": "cpp",
+    "vue.js": "vue", "vuejs": "vue",
+    "next.js": "nextjs", "nuxt.js": "nuxt",
+    "amazon web services": "aws",
+    "google cloud platform": "gcp", "google cloud": "gcp",
+}
+
+
+def _canonical_skill(skill: str) -> str:
+    """Lowercase, trim, and map known spelling variants to a canonical token."""
+    s = skill.lower().strip()
+    return _SKILL_ALIASES.get(s, s)
+
+
 def compute_skill_score(
     developer_skills: list[str],
     required_skills: list[str],
@@ -78,8 +110,8 @@ def compute_skill_score(
 
     Returns a float in [0.0, 1.0].
     """
-    dev_set = {s.lower().strip() for s in developer_skills if s.strip()}
-    req_set = {s.lower().strip() for s in required_skills if s.strip()}
+    dev_set = {_canonical_skill(s) for s in developer_skills if s.strip()}
+    req_set = {_canonical_skill(s) for s in required_skills if s.strip()}
 
     if not req_set:
         return 0.0
@@ -235,11 +267,21 @@ def compute_motivation_score(
     growth_opportunities: list[str],
     workload_intensity: float,
 ) -> float:
-    """Cosine similarity between developer motivation vector and project motivation profile."""
+    """Cosine similarity between developer motivation vector and project motivation profile.
+
+    Both vectors are centered around 0.5 before the cosine (mirroring
+    ``compute_workstyle_score``). Motivation values live in [0.0, 1.0]; centering
+    maps them to [-0.5, 0.5] so that opposing motivation profiles (e.g. a
+    stability-seeker vs a high-innovation project) point in opposite directions and
+    yield a low score — without centering, raw cosine over all-positive vectors
+    stays misleadingly high (~0.9) and under-discriminates the behavioral signal.
+    """
     project_vector = derive_project_motivation_vector(
         innovation_level, growth_opportunities, workload_intensity
     )
-    return round(cosine_similarity(dev_motivation_vector, project_vector), 6)
+    dev_centered = _center(dev_motivation_vector)
+    proj_centered = _center(project_vector)
+    return round(cosine_similarity(dev_centered, proj_centered), 6)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -396,8 +438,11 @@ def generate_stub_explanation(
     This stub is always ≥ 50 characters and is replaced asynchronously by the
     Claude-generated explanation. No raw vectors are referenced.
     """
+    # Canonicalize (react.js → react) so the narrative agrees with compute_skill_score,
+    # which also canonicalizes — otherwise a credited skill could read as "missing".
     common_skills = sorted(
-        {s.lower() for s in developer_skills} & {s.lower() for s in project_required_skills}
+        {_canonical_skill(s) for s in developer_skills}
+        & {_canonical_skill(s) for s in project_required_skills}
     )
 
     # --- Skill alignment paragraph ---
@@ -474,9 +519,11 @@ def generate_risks(
             f"'{project_timezone_overlap}' limits synchronous collaboration windows."
         )
 
+    # Canonicalize so an aliased-but-covered skill (react.js vs react) is not flagged
+    # as a gap while compute_skill_score (which canonicalizes) credits it.
     missing = sorted(
-        {s.lower() for s in project_required_skills}
-        - {s.lower() for s in developer_skills}
+        {_canonical_skill(s) for s in project_required_skills}
+        - {_canonical_skill(s) for s in developer_skills}
     )
     if missing:
         missing_str = ", ".join(s.title() for s in missing[:3])

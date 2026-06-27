@@ -176,22 +176,22 @@ Key functions (all in `src/orchestrator/engine.py`):
 
 | Concern | Function | Line |
 |---------|----------|------|
-| Feedback-loop driver (DAG + monitoring) | `run` | 402 |
-| Wave scheduler (done/paused/failed) | `_run_dag` | 468 |
-| Concurrent wave execution | `_run_wave` | 519 |
-| Single-task retry/rework/escalate | `_run_task` | 558 |
-| Retry with back-off | `_retry` | 620 |
-| Block + circuit breaker | `_block` | 634 |
-| Bounded review/e2e→fix loop | `_request_rework` / `_drain_rework` / `_apply_rework` | 647 / 672 / 680 |
-| Post-run schema + gate validation | `_check` | 749 |
-| Review verdict gate | `_review_gate` | 781 |
-| Deployment gate | `_deploy_gate` | 813 |
-| E2E (browser) gate | `_e2e_gate` | 839 |
-| Monitoring fold + classify | `_monitor` | 875 |
-| Feedback loop: Level-1 health rework | `_try_health_rework` | 911 |
-| Feedback loop: Level-2 cross-run re-plan | `_try_feedback_cycle` | 939 |
-| Human checkpoint block | `_gate_pause` | 535 |
-| Topological sort / cycle detect | `_topo_order` | 301 |
+| Feedback-loop driver (DAG + monitoring) | `run` | 412 |
+| Wave scheduler (done/paused/failed) | `_run_dag` | 479 |
+| Concurrent wave execution | `_run_wave` | 530 |
+| Single-task retry/rework/escalate | `_run_task` | 569 |
+| Retry with back-off | `_retry` | 631 |
+| Block + circuit breaker | `_block` | 645 |
+| Bounded review/e2e→fix loop | `_request_rework` / `_drain_rework` / `_apply_rework` | 658 / 683 / 691 |
+| Post-run schema + gate validation | `_check` | 760 |
+| Review verdict gate | `_review_gate` | 792 |
+| Deployment gate | `_deploy_gate` | 824 |
+| E2E (browser) gate | `_e2e_gate` | 850 |
+| Monitoring fold + classify | `_monitor` | 886 |
+| Feedback loop: Level-1 health rework | `_try_health_rework` | 922 |
+| Feedback loop: Level-2 cross-run re-plan | `_try_feedback_cycle` | 950 |
+| Human checkpoint block | `_gate_pause` | 546 |
+| Topological sort / cycle detect | `_topo_order` | 311 |
 | Atomic state persist | `_persist` | 192 |
 | Event stamping | `_event` | 203 |
 
@@ -227,7 +227,7 @@ code-execution / injection / secret sinks (`eval`, `exec`, `os.system`,
 `subprocess(..., shell=True)`, `child_process`, hard-coded secrets) are an
 **unrecoverable block**; XSS-prone-but-often-legitimate DOM sinks (`innerHTML`,
 `document.write`) are surfaced as **non-blocking warnings** (`SPEC.md §9`). The scan
-runs at the `code_review` gate (`engine.py:765`).
+runs at the `code_review` gate (`engine.py:776`).
 
 ---
 

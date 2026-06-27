@@ -30,14 +30,19 @@ TEST_FEEDBACK_ID = uuid.UUID("44444444-4444-4444-4444-444444444444")
 # ─────────────────────────────────────────────────────────────────────────────
 
 def dev_auth_headers() -> dict[str, str]:
-    """Returns Authorization header for a developer role user."""
-    token = create_access_token(DEV_USER_ID, "developer")
+    """Returns Authorization header for a developer role user.
+
+    The developer token carries developer_profile_id so the own-profile and
+    feedback authorization checks (src/api/developers.py, src/api/feedback.py)
+    treat this user as the owner of DEV_USER_ID's profile.
+    """
+    token = create_access_token(DEV_USER_ID, "developer", DEV_USER_ID)
     return {"Authorization": f"Bearer {token}"}
 
 
 def mgr_auth_headers() -> dict[str, str]:
-    """Returns Authorization header for a manager role user."""
-    token = create_access_token(MGR_USER_ID, "manager")
+    """Returns Authorization header for a manager role user (no developer profile)."""
+    token = create_access_token(MGR_USER_ID, "manager", None)
     return {"Authorization": f"Bearer {token}"}
 
 

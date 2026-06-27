@@ -14,6 +14,8 @@ AC9: DELETE triggers atomic cascade covering all 6 entity classes.
 """
 from __future__ import annotations
 
+import asyncio
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -109,6 +111,10 @@ class RiskResponse(BaseModel):
     burnout_risk_badge: str
     bench_risk_badge: str
     computed_at: datetime
+    # Task04-requirements §1 (Mission Objective) third prediction. Null when the
+    # developer has no match record yet (behavioral fit unknown).
+    team_mismatch_probability: Optional[float] = None
+    team_mismatch_badge: Optional[str] = None
 
 
 class SuggestedProjectMove(BaseModel):
@@ -257,6 +263,86 @@ async def create_developer(
     }
     background_tasks.add_task(_enqueue_embeddings, dev.id, dev_data)
     return _profile_to_response(dev)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /developers/enrich  (Task04-requirements §3.1 — raw text → structured vectors)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class EnrichmentRequest(BaseModel):
+    """Raw operator text to derive a structured profile from."""
+    cv_text: str = Field(..., min_length=1)
+    git_log_text: str = ""
+    slack_text: str = ""
+    timezone: str = "UTC"
+    availability_hours: int = Field(40, ge=1, le=168)
+    experience_years: Optional[int] = Field(None, ge=0)
+
+
+class EnrichmentDraftResponse(BaseModel):
+    """A DeveloperProfileCreate-shaped DRAFT for human review before creation.
+
+    Provenance is "llm" or "heuristic"; is_self_reported is False because these
+    vectors were derived from raw text, not self-declared.
+    """
+    skills: list[str]
+    preferred_stack: list[str]
+    work_style: list[float]
+    motivation_vector: list[float]
+    career_goals: list[str]
+    timezone: str
+    availability_hours: int
+    experience_years: int
+    is_self_reported: bool = False
+    provenance: str
+
+
+@router.post("/enrich", response_model=EnrichmentDraftResponse)
+async def enrich_developer_profile(
+    payload: EnrichmentRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+) -> EnrichmentDraftResponse:
+    """Derive a structured profile draft from raw CV / Git / Slack text.
+
+    Returns a draft only — the caller reviews it and POSTs to /developers to create
+    an actual profile. The LLM path is used when configured; otherwise a deterministic
+    heuristic extraction runs (always available, no key required).
+    """
+    from src.services.enrichment import enrich_profile
+
+    # enrich_profile is synchronous and may call the Gemini API; run it off the event
+    # loop so a slow LLM call can't block every other concurrent request.
+    result = await asyncio.to_thread(
+        enrich_profile, payload.cv_text, payload.git_log_text, payload.slack_text
+    )
+
+    # The draft feeds DeveloperProfileCreate, which requires a non-empty skills list.
+    # Fail fast here with a clear message instead of a confusing 422 at POST /developers.
+    if not result.skills:
+        raise HTTPException(
+            status_code=422,
+            detail="No skills could be extracted from the provided text — add them manually.",
+        )
+
+    # Infer experience years from the request, or roughly from the CV. Take the LARGEST
+    # "<n> years" figure (CVs mention project durations too), clamped to a sane range.
+    exp = payload.experience_years
+    if exp is None:
+        yrs = [int(n) for n in re.findall(r"(\d{1,2})\s*\+?\s*years?\b", payload.cv_text, re.IGNORECASE)]
+        exp = min(max(yrs), 60) if yrs else 3
+
+    return EnrichmentDraftResponse(
+        skills=result.skills,
+        preferred_stack=result.preferred_stack,
+        work_style=result.work_style,
+        motivation_vector=result.motivation_vector,
+        career_goals=result.career_goals,
+        timezone=payload.timezone,
+        availability_hours=payload.availability_hours,
+        experience_years=exp,
+        is_self_reported=False,
+        provenance=result.provenance,
+    )
 
 
 @router.get("/{developer_id}", response_model=DeveloperProfileResponse)
@@ -446,8 +532,32 @@ async def get_developer_risk(
         for a in alloc_rows
     ]
 
+    # Behavioral fit for the team-mismatch prediction comes from the developer's match
+    # against their ASSIGNED project — the project_id of an active allocation, newest
+    # match. (Not merely the latest match overall, which could be against a project the
+    # developer is not on.) None when no match exists for an assigned project.
+    active_project_ids = {
+        a.project_id for a in alloc_rows if a.is_active and a.project_id is not None
+    }
+    assigned_match = None
+    if active_project_ids:
+        match_result = await db.execute(
+            select(MatchRecord)
+            .where(
+                MatchRecord.developer_id == developer_id,
+                MatchRecord.project_id.in_(active_project_ids),
+            )
+            .order_by(MatchRecord.timestamp.desc())
+            .limit(1)
+        )
+        assigned_match = match_result.scalar_one_or_none()
+
     # motivation_alignment_factor defaults to 0.0 (unknown/worst-case)
-    scores = compute_risk_scores(slices)
+    scores = compute_risk_scores(
+        slices,
+        workstyle_score=assigned_match.workstyle_score if assigned_match else None,
+        motivation_score=assigned_match.motivation_score if assigned_match else None,
+    )
 
     return RiskResponse(
         developer_id=developer_id,
@@ -456,6 +566,8 @@ async def get_developer_risk(
         burnout_risk_badge=scores.burnout_risk_badge,
         bench_risk_badge=scores.bench_risk_badge,
         computed_at=scores.computed_at,
+        team_mismatch_probability=scores.team_mismatch_probability,
+        team_mismatch_badge=scores.team_mismatch_badge,
     )
 
 

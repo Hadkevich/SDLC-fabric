@@ -19,7 +19,8 @@ and least-privilege + model-diverse by role. It matches the brief's *"determinis
 creativity, orchestration > model intelligence"* constraint.
 
 The recorded end-to-end demo (`neural-sync`) produced **all** artifacts, a **green QA
-suite (77/77)**, and reaches `current_stage: "complete"` with every stage gate
+suite (108/108 today; 77/77 at the original recorded run)**, and reaches
+`current_stage: "complete"` with every stage gate
 satisfied (`workflow_state.json`). Along the way the **review gate caught a real
 contract defect (BLK-001)** — the deploy gate correctly refused to ship while the
 review verdict was `rejected`. The defect was fixed, the reviewer re-approved
@@ -54,7 +55,8 @@ Every required artifact is present and schema-valid in
 advanced on free-form prose.
 
 ### 2.3 QA was green and traceable
-`test_plan.json` → `summary: { total: 77, passed: 77, failed: 0, skipped: 0 }`, with
+`test_plan.json` → `summary: { total: 108, passed: 108, failed: 0, skipped: 0 }`
+(108 today; 77 at the original recorded run), with
 **all 13 acceptance criteria (AC1–AC13) covered by ≥1 test**, including the two
 signature cases from the idea brief: good-match score ≥ 0.75 (TC-001) and the skill-only
 **trap** bad-match score ≤ 0.45 (TC-002). The behavioral layer demonstrably changes the
@@ -137,9 +139,15 @@ event rather than a terminal one:
 | Criterion | Verdict | Basis |
 |-----------|:------:|-------|
 | ≥80% of runs without human intervention | ✅ | Run reaches `complete`; human input only at the **3 designed checkpoints** (requirements, architecture, `production_deploy` — `HUMAN_GATES`). Engine also supports fully unattended `--yes` runs |
-| Artifacts consistent (QA tests pass) | ✅ | 77/77 pass, all AC covered; all artifacts schema-valid |
+| Artifacts consistent (QA tests pass) | ✅ | 108/108 pass (77 at the recorded run), all AC covered; all artifacts schema-valid |
 | Recover from ≥2 simulated failures | ✅ | Transient timeouts recovered twice (§3.2); the review gate caught BLK-001 and the run closed it and re-deployed (§3.1/§3.3) |
 | Re-run with modified requirements | ✅ | `workflow_id`-keyed runs; product update mode; `--replay` re-validation |
+
+**Cost & Efficiency (scorecard §7):** per-role spend is auto-collected from the event log into
+`artifacts/cost_report.{json,md}` (`--cost-report`; recorded run **$16.51** / 16.2M tok / 5611s),
+models are routed per role (opus/sonnet/haiku, `SPEC.md §4`), and a live model A/B
+(`scripts/cost_ab_experiment.py`) shows a cheap model is good enough for log summarization. Full
+write-up → [`COST-EFFICIENCY.md`](COST-EFFICIENCY.md).
 
 ---
 

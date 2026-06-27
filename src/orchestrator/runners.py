@@ -23,6 +23,8 @@ import threading
 import time
 from pathlib import Path
 
+from .frontmatter import read_frontmatter_lines
+
 
 class RunnerError(Exception):
     """Base class for runner failures."""
@@ -166,19 +168,7 @@ class ClaudeAgentRunner(Runner):
         agent_file = Path(project_root) / ".claude" / "agents" / f"{short}.agent.md"
         if not agent_file.exists():
             agent_file = Path(project_root) / ".claude" / "agents" / f"{owner_agent}.md"
-        if not agent_file.exists():
-            return []
-        try:
-            text = agent_file.read_text()
-        except OSError:
-            return []
-        if not text.startswith("---"):
-            return []
-        end = text.find("\n---", 3)
-        if end == -1:
-            return []
-        for line in text[3:end].splitlines():
-            stripped = line.strip()
+        for stripped in read_frontmatter_lines(agent_file):
             if stripped.startswith("tools:"):
                 bracket_start = stripped.find("[")
                 bracket_end = stripped.find("]")

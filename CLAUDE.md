@@ -10,6 +10,7 @@ Everything a grader needs is mapped explicitly — do not guess, follow the map:
 4. **[`EVALUATION.md`](EVALUATION.md)** — what worked / what failed on the real `neural-sync` run (honest; the run completes end-to-end — the review gate caught BLK-001, it was fixed, and deployment passed; `e2e_validation` is implemented but not yet exercised on the demo).
 5. **[`docs/requirements/`](docs/requirements/)** — the source-of-truth requirements this repo is graded against (verbatim).
 6. **[`projects/neural-sync/`](projects/neural-sync/)** — the demo app the pipeline built ([README](projects/neural-sync/README.md)).
+7. **[`COST-EFFICIENCY.md`](COST-EFFICIENCY.md)** — scorecard §7: per-role cost report (`--cost-report` → `cost_report.{json,md}`), model routing (opus/sonnet/haiku), and the live model A/B.
 
 Code map: deterministic engine → `src/orchestrator/` · subagents → `.claude/agents/`
 (product, planner, architect, developer, reviewer, qa, devops, **e2e**, orchestrator) ·
