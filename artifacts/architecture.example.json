@@ -1,0 +1,69 @@
+{
+    "spec_version": "v1",
+    "workflow_id": "wf-habit-tracker-001",
+    "components": [
+        {
+            "id": "api",
+            "name": "Habit Tracker API",
+            "type": "service",
+            "responsibilities": [
+                "Handle HTTP requests for habit CRUD",
+                "Handle HTTP requests for habit completion",
+                "Validate incoming payloads",
+                "Return structured JSON responses"
+            ],
+            "interfaces": [
+                { "name": "REST API", "type": "http", "ref": "artifacts/api-contracts.json" }
+            ],
+            "depends_on": ["store"]
+        },
+        {
+            "id": "store",
+            "name": "SQLite Persistence",
+            "type": "store",
+            "responsibilities": [
+                "Persist habits and completions",
+                "Enforce uniqueness constraints"
+            ],
+            "interfaces": [
+                { "name": "SQLite file", "type": "file", "ref": "artifacts/data-model.json" }
+            ],
+            "depends_on": []
+        }
+    ],
+    "runtime": {
+        "language": "Python",
+        "runtime_version": "3.12",
+        "framework": "FastAPI",
+        "build_command": "pip install -r requirements.txt",
+        "start_command": "uvicorn main:app --reload"
+    },
+    "persistence": {
+        "type": "sqlite",
+        "migrations": true,
+        "schema_ref": "artifacts/data-model.json"
+    },
+    "failure_modes": [
+        {
+            "scenario": "SQLite file is corrupted or missing",
+            "mitigation": "Application exits with a clear error message on startup; file path is configurable via env var"
+        },
+        {
+            "scenario": "Duplicate completion for same habit+date",
+            "mitigation": "Database unique constraint + 409 Conflict response"
+        },
+        {
+            "scenario": "Invalid request payload",
+            "mitigation": "FastAPI pydantic validation returns 422 Unprocessable Entity with field-level errors"
+        }
+    ],
+    "adrs": [
+        {
+            "id": "ADR-001",
+            "title": "Use SQLite for local persistence",
+            "ref": "artifacts/adr/ADR-001-sqlite.json"
+        }
+    ],
+    "api_contracts_ref": "artifacts/api-contracts.json",
+    "data_model_ref": "artifacts/data-model.json"
+}

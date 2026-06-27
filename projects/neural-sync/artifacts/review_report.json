@@ -1,0 +1,77 @@
+{
+  "spec_version": "v1",
+  "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
+  "task_id": "T-06-REVIEW",
+  "reviewer": "reviewer-agent (Claude Sonnet)",
+  "verdict": "rejected",
+  "reviewed_at": "2026-06-27T10:00:00Z",
+  "summary": "Review covers all 13 acceptance criteria (AC1–AC13) mapped against src/ and frontend/src/ source files, api-contracts.json, architecture.json, and the versioned prompt artifact. One blocking issue was found: GET /teams/{team_id}/risk-summary returns HTTP 501 Not Implemented (src/api/feedback.py:248) instead of the contracted 200 + TeamRiskSummary, making the Manager Dashboard (AC8) non-functional at runtime. The author deliberately deferred this endpoint pending a Team entity in Phase 2 (documented inline as BLK-002), but the contract and the AC8 done-criterion require it to work. All other acceptance criteria are implemented correctly: the five-dimension matching engine (AC1–AC2) is sound; stub explanations meet AC3 (>=50 chars, three sections); burnout/bench risk formulas match spec (AC4–AC5); weights are loaded fresh from DB on every match request (AC6); the Developer Dashboard renders project cards with explanation polling (AC7); GDPR cascade deletion covers all six entity classes via SQLAlchemy ORM cascade relationships (AC9); feedback + rejection-rate analytics are complete (AC10); good/bad match score ranges are covered by tests (AC11); no inline LLM prompt strings exist — the prompt is loaded exclusively from artifacts/prompts/match_explanation_v1.json at runtime (AC12); and the integration test suite (AC13) exercises the full pipeline. Security posture is strong: bcrypt password hashing, JWT type-claim validation, role-based access checks on every protected route, HttpOnly refresh-token cookie, and a startup guard that refuses to start in non-debug mode with the default JWT secret. Seven non-blocking issues are noted covering performance, minor correctness gaps, and test coverage.",
+  "blocking_issues": [
+    {
+      "id": "BLK-001",
+      "category": "contract_violation",
+      "description": "GET /teams/{team_id}/risk-summary always returns HTTP 501 Not Implemented instead of HTTP 200 with a TeamRiskSummary payload as specified in api-contracts.json. The implementation comment (BLK-002) explains this was intentional to avoid silently ignoring team_id and returning unscoped data, but no Team entity was added as an alternative. At runtime the ManagerDashboard.tsx calls getTeamRiskSummary(teamId), receives an ApiClientError for every team UUID, and renders the error state rather than risk badges. AC8 ('The Manager dashboard view displays per-developer risk badges without exposing raw behavioral vectors') cannot be satisfied until this endpoint returns a conformant response. The frontend component, TypeScript types, and per-developer GET /developers/{id}/risk route are all correctly implemented and AC8-compliant; only the team-scoped aggregation endpoint is missing.",
+      "file_ref": "src/api/feedback.py",
+      "line_ref": 248,
+      "suggestion": "Implement the GET /teams/{team_id}/risk-summary endpoint. Phase 1 may scope it by fetching all DeveloperProfile records (since no Team entity exists), computing compute_risk_scores() per developer, and assembling a TeamRiskSummary. Alternatively add a minimal Team+TeamMembership table via Alembic migration to enable proper team scoping. The response schema is already defined (TeamRiskSummary Pydantic model in feedback.py and TypeScript interface in client.ts) — only the handler body needs implementation."
+    }
+  ],
+  "non_blocking_issues": [
+    {
+      "id": "NBI-001",
+      "category": "performance",
+      "description": "In src/api/developers.py get_developer_matches(), the total record count is computed by loading ALL matching MatchRecord rows into memory via scalars().all() (two full ORM hydrations), then counting the resulting Python list. For a developer with thousands of match records this serialises all rows into memory just to get a count. A SELECT COUNT(*) via func.count() would be O(1) in the DB instead of O(n) in Python.",
+      "file_ref": "src/api/developers.py",
+      "line_ref": 401,
+      "suggestion": "Replace the first SELECT MatchRecord query with: total_result = await db.execute(select(func.count()).where(MatchRecord.developer_id == developer_id)); total = int(total_result.scalar()). Import func from sqlalchemy."
+    },
+    {
+      "id": "NBI-002",
+      "category": "correctness",
+      "description": "In get_developer_matches(), the total count query (line 401–404) does not apply the min_score filter even when min_score is provided. The returned total field therefore reflects all match records for the developer, not only those above the min_score threshold. API consumers that paginate using min_score + top_k will receive a total that overstates the actual result set size.",
+      "file_ref": "src/api/developers.py",
+      "line_ref": 398,
+      "suggestion": "Build a separate count_query starting from the same base filter as query (including min_score), then use that for the COUNT(*). Alternatively make total represent the full unfiltered count and document it clearly in the OpenAPI description (which does say 'before top_k filtering' but does not mention min_score filtering)."
+    },
+    {
+      "id": "NBI-003",
+      "category": "correctness",
+      "description": "The _enqueue_embeddings() background task in src/api/developers.py calls generate_developer_embeddings() which returns vector dictionaries but never writes them to the developer_embeddings table and never updates DeveloperProfile.embedding_status from 'pending' to 'ready'. As a result, every developer profile created or updated via the API retains embedding_status='pending' indefinitely. The matching engine sets behavioral_data_unavailable=True for such profiles. Note: actual 5-dimension scoring in POST /matches is computed from inline request vectors (not from stored embeddings), so match scores are numerically correct. The gap is that ANN-based candidate retrieval always operates in degraded mode and the embedding_status field is misleading.",
+      "file_ref": "src/api/developers.py",
+      "line_ref": 127,
+      "suggestion": "The background task should (a) call db.execute() to upsert DeveloperEmbedding rows into developer_embeddings for each embedding type, and (b) update DeveloperProfile.embedding_status to 'ready' on success or 'failed' after exhausted retries. This requires passing a DB session or connection URL into the background task, similar to the pattern used in _async_generate_explanation() in matches.py."
+    },
+    {
+      "id": "NBI-004",
+      "category": "correctness",
+      "description": "GET /analytics/team-rejection-rate?team_id={id} in src/api/analytics.py (line 147) queries SELECT DISTINCT developer_id FROM feedback_records without any team_id filter. Because there is no Team entity or TeamMembership table in Phase 1, the endpoint ignores team_id entirely and returns rejection statistics for every developer who has submitted feedback in the entire system. The returned team_id field reflects the requested UUID, but the members list is unscoped. A manager viewing team 'A' and team 'B' receives identical results.",
+      "file_ref": "src/api/analytics.py",
+      "line_ref": 147,
+      "suggestion": "Either (a) add a 501 Not Implemented response with a clear comment (consistent with the approach taken for team risk summary) until Team membership is modelled, or (b) return only the developer_ids that are members of the requested team by joining with a team membership table once that entity exists."
+    },
+    {
+      "id": "NBI-005",
+      "category": "security",
+      "description": "The logout flow in frontend/src/App.tsx and src/api/client.ts clears the in-memory access_token but does not call any server-side endpoint to invalidate the HttpOnly refresh_token cookie. After the user signs out, the refresh_token cookie remains valid on the browser until its 7-day TTL expires. If the cookie is already in a cookie-theft scenario, the attacker can use it for up to 7 days post-logout. This is documented as a known limitation in code_spec.json, and is an acceptable Phase 1 trade-off given the stateless JWT design, but it should be tracked for resolution before production.",
+      "file_ref": "frontend/src/App.tsx",
+      "line_ref": 269,
+      "suggestion": "Add a DELETE /auth/logout endpoint that deletes or overwrites the HttpOnly refresh_token cookie server-side (set max_age=0) and maintains a server-side revocation list if zero-TTL is insufficient. Phase 1 minimum: at logout, POST to /auth/logout so the server can overwrite the cookie with an expired one."
+    },
+    {
+      "id": "NBI-006",
+      "category": "maintainability",
+      "description": "The default weights in the api-contracts.json MatchResponse example (w4=0.10, w5=0.15) differ from the actual code defaults in src/api/config.py and src/api/matches.py (w4_timezone=0.15, w5_growth=0.10) and from the test_plan.json TC-001 and TC-062 values (w4=0.15, w5=0.10). OpenAPI examples are non-normative, but the discrepancy creates confusion when developers validate their integration against the docs example.",
+      "file_ref": "artifacts/api-contracts.json",
+      "line_ref": 620,
+      "suggestion": "Update the MatchResponse and WeightConfig example in api-contracts.json to use w4=0.15, w5=0.10 to match the actual seeded defaults. The contract constraint ('weights sum to 1.0') is not violated by either set; it is purely a documentation accuracy fix."
+    },
+    {
+      "id": "NBI-007",
+      "category": "test_coverage",
+      "description": "test_plan.json TC-072 ('Manager risk endpoint returns badges without raw behavioral vectors') tests GET /api/v1/developers/{id}/risk (individual developer endpoint) — not GET /teams/{team_id}/risk-summary. There is no test case that exercises the team risk summary endpoint or documents its current 501 status. Additionally, no test verifies that the ExplanationCache entries are properly expired after PUT /config/weights (the implicit invalidation via cache_key hash change is untested).",
+      "file_ref": "artifacts/test_plan.json",
+      "line_ref": 688,
+      "suggestion": "Add a test case mapping to AC8 that calls GET /teams/{team_id}/risk-summary and asserts the response shape matches TeamRiskSummary once the endpoint is implemented. Add a weight-change-then-rematch test that verifies the new score uses updated weights and the old ExplanationCache entry is not returned."
+    }
+  ]
+}

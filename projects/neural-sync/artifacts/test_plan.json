@@ -1,0 +1,748 @@
+{
+  "spec_version": "v1",
+  "workflow_id": "neural-sync-T-07-QA",
+  "test_suites": [
+    {
+      "suite_id": "suite-matching-engine",
+      "name": "Five-Dimension Matching Engine Unit Tests",
+      "owner_agent": "qa-agent",
+      "test_cases": [
+        {
+          "test_id": "TC-001",
+          "name": "Good-match score is at least 0.75",
+          "given": "A developer with high skill overlap (Python/FastAPI/PostgreSQL/Docker/React, 8yr exp), aligned work-style ([0.9,0.8,...]), compatible timezone (Europe/Warsaw), and matching career goals",
+          "when": "compute_match_score() is called with default weights (w1=0.30, w2=0.25, w3=0.20, w4=0.15, w5=0.10) against a Python/FastAPI/PostgreSQL project in UTC+1 to UTC+3",
+          "then": "match_score >= 0.75 confirming the labeled good-match scenario",
+          "status": "pass",
+          "maps_to_requirement": "AC11"
+        },
+        {
+          "test_id": "TC-002",
+          "name": "Bad-match score is at most 0.45",
+          "given": "A developer with zero skill overlap (Java/Spring), opposing work-style ([0.1]*8), misaligned timezone (US/Pacific), and non-matching career goals",
+          "when": "compute_match_score() is called with default weights against a Python/FastAPI project requiring UTC+5 to UTC+8",
+          "then": "match_score <= 0.45 confirming the labeled bad-match scenario",
+          "status": "pass",
+          "maps_to_requirement": "AC11"
+        },
+        {
+          "test_id": "TC-003",
+          "name": "Behavioral dimension (w2) is non-zero and active",
+          "given": "Two profile pairs with identical skills; Pair A has opposing work_style ([0.1]*8) and Pair B has aligned work_style ([0.9]*8)",
+          "when": "match_score is computed for both pairs",
+          "then": "Pair A score is strictly lower than Pair B score, with difference >= 0.10",
+          "status": "pass",
+          "maps_to_requirement": "AC2"
+        },
+        {
+          "test_id": "TC-004",
+          "name": "Stub explanation contains skill, behavioral, and growth sections",
+          "given": "A good-match developer and project profile pair with skill_score=0.80, workstyle_score=0.75, motivation_score=0.70, growth_score=0.65",
+          "when": "generate_stub_explanation() is called",
+          "then": "Explanation string has len >= 50 and contains keywords: 'skill', any of ('behavioral','work-style','work style'), any of ('growth','career','potential')",
+          "status": "pass",
+          "maps_to_requirement": "AC3"
+        },
+        {
+          "test_id": "TC-005",
+          "name": "Stub explanation valid with zero skill overlap",
+          "given": "A bad-match profile pair with skill_score=0.0",
+          "when": "generate_stub_explanation() is called",
+          "then": "Explanation is a valid string >= 50 chars with all three required sections",
+          "status": "pass",
+          "maps_to_requirement": "AC3"
+        },
+        {
+          "test_id": "TC-006",
+          "name": "match_score is a float bounded in [0.0, 1.0]",
+          "given": "Various component score combinations including all-zeros, all-ones, and midpoints",
+          "when": "compute_match_score() is called",
+          "then": "Result is a float in [0.0, 1.0] for all inputs",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-007",
+          "name": "Weight change causes deterministic score delta",
+          "given": "A bad-match profile pair with skill_score~=0.0 and moderate behavioral scores",
+          "when": "compute_match_score() is called with default weights and then with skill-heavy weights (w1=0.70)",
+          "then": "The score difference between default and skill-heavy is >= 0.04",
+          "status": "pass",
+          "maps_to_requirement": "AC6"
+        },
+        {
+          "test_id": "TC-008",
+          "name": "Skill score is 0.0 when no skill overlap",
+          "given": "Developer has Java/Spring skills; project requires Python/FastAPI",
+          "when": "compute_skill_score() is called",
+          "then": "score == 0.0",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-009",
+          "name": "Skill score is near maximum with exact skill match",
+          "given": "Developer has exactly the required skills and 10 years experience",
+          "when": "compute_skill_score() is called",
+          "then": "score > 0.90",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-010",
+          "name": "Skill score increases with experience years",
+          "given": "Same skill set with 0 vs 10 years experience",
+          "when": "compute_skill_score() is called for both",
+          "then": "score(10yr) > score(0yr)",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-011",
+          "name": "Skill score is always bounded in [0.0, 1.0]",
+          "given": "Developer with more skills than required and 15 years experience",
+          "when": "compute_skill_score() is called",
+          "then": "score in [0.0, 1.0]",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-012",
+          "name": "Timezone score is 1.0 when developer is within required range",
+          "given": "Developer timezone is Europe/Warsaw (UTC+1/UTC+2); project requires UTC+1 to UTC+3",
+          "when": "compute_timezone_score() is called",
+          "then": "score == 1.0",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-013",
+          "name": "Timezone score is 0.0 when developer is far outside required range",
+          "given": "Developer is US/Pacific (UTC-8); project requires UTC+5 to UTC+8",
+          "when": "compute_timezone_score() is called",
+          "then": "score == 0.0 (distance >= 12h)",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-014",
+          "name": "Timezone score is partial for moderate timezone distance",
+          "given": "Developer is US/Eastern (UTC-5/-4); project requires UTC+0 to UTC+3",
+          "when": "compute_timezone_score() is called",
+          "then": "0.0 < score < 1.0",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-015",
+          "name": "Growth score is high when goals match opportunities",
+          "given": "Developer goals: ['technical leadership', 'distributed systems']; project opportunities overlap",
+          "when": "compute_growth_score() is called",
+          "then": "score >= 0.50",
+          "status": "pass",
+          "maps_to_requirement": "AC6"
+        },
+        {
+          "test_id": "TC-016",
+          "name": "Growth score is low when goals do not match",
+          "given": "Developer goal: 'legacy systems'; project opportunities: kubernetes/microservices/ML",
+          "when": "compute_growth_score() is called",
+          "then": "score <= 0.15",
+          "status": "pass",
+          "maps_to_requirement": "AC6"
+        },
+        {
+          "test_id": "TC-017",
+          "name": "Growth score is 0.0 when career_goals is empty",
+          "given": "Developer has no career_goals",
+          "when": "compute_growth_score() is called",
+          "then": "score == 0.0",
+          "status": "pass",
+          "maps_to_requirement": "AC6"
+        },
+        {
+          "test_id": "TC-018",
+          "name": "Cosine similarity of identical vectors is 1.0",
+          "given": "Two identical vectors v",
+          "when": "cosine_similarity(v, v) is called",
+          "then": "result == 1.0",
+          "status": "pass",
+          "maps_to_requirement": "AC2"
+        },
+        {
+          "test_id": "TC-019",
+          "name": "Cosine similarity of opposite vectors is 0.0",
+          "given": "v1=[1,1,1] and v2=[-1,-1,-1] (opposing vectors)",
+          "when": "cosine_similarity(v1, v2) is called",
+          "then": "result == 0.0 (scaled to [0,1])",
+          "status": "pass",
+          "maps_to_requirement": "AC2"
+        },
+        {
+          "test_id": "TC-020",
+          "name": "Cosine similarity returns 0.5 (neutral) for zero-norm vector",
+          "given": "v1=[0,0,0] (zero vector) and any non-zero v2",
+          "when": "cosine_similarity(v1, v2) is called",
+          "then": "result == 0.5 (neutral)",
+          "status": "pass",
+          "maps_to_requirement": "AC2"
+        },
+        {
+          "test_id": "TC-021",
+          "name": "Pure computation latency is under 500ms at p95",
+          "given": "100 iterations of the full five-dimension score computation plus stub explanation",
+          "when": "timing is measured for all 100 iterations",
+          "then": "p95 latency < 500ms",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-022",
+          "name": "Match score is 0.0 when all component scores are 0.0 (negative test)",
+          "given": "All component scores are 0.0",
+          "when": "compute_match_score() is called",
+          "then": "score == 0.0",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-023",
+          "name": "Match score does not exceed 1.0 with overflowing inputs",
+          "given": "w1=1.0, all other weights 0.0, all scores 1.0",
+          "when": "compute_match_score() is called",
+          "then": "score == 1.0 (clamped)",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-024",
+          "name": "Derived project work-style vector has exactly 8 dimensions",
+          "given": "Any team_structure, workload_intensity, innovation_level",
+          "when": "derive_project_work_style_vector() is called",
+          "then": "len(vector) == 8 and all values in [0.0, 1.0]",
+          "status": "pass",
+          "maps_to_requirement": "AC2"
+        },
+        {
+          "test_id": "TC-025",
+          "name": "Prompt artifact is a versioned file, not inline code",
+          "given": "The artifacts/prompts/match_explanation_v1.json artifact file exists",
+          "when": "The file is loaded and ClaudeService is initialized",
+          "then": "File contains required fields (prompt_key, version, template_text, model_name); ClaudeService.prompt.template_text matches the file content",
+          "status": "pass",
+          "maps_to_requirement": "AC12"
+        }
+      ]
+    },
+    {
+      "suite_id": "suite-risk-engine",
+      "name": "Risk Engine Unit Tests (Burnout and Bench Risk)",
+      "owner_agent": "qa-agent",
+      "test_cases": [
+        {
+          "test_id": "TC-026",
+          "name": "Burnout risk > 0.6 after 48+ consecutive weeks at intensity >= 0.8",
+          "given": "A developer with one AllocationSlice spanning ~52 weeks at workload_intensity=0.8, motivation_alignment_factor=0.0",
+          "when": "compute_burnout_risk() is called",
+          "then": "burnout_risk_score > 0.6",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-027",
+          "name": "Burnout risk > 0.6 for exactly 48 weeks at intensity 0.9",
+          "given": "AllocationSlice of exactly 48 weeks at workload_intensity=0.9",
+          "when": "compute_burnout_risk() is called",
+          "then": "score > 0.6",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-028",
+          "name": "Burnout risk < 0.6 for fewer than 48 consecutive weeks",
+          "given": "AllocationSlice of ~16 weeks at workload_intensity=0.85",
+          "when": "compute_burnout_risk() is called",
+          "then": "score < 0.6 (formula: (16/48)*0.85*1.0 ≈ 0.28)",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-029",
+          "name": "Burnout risk is 0.0 with full motivation alignment",
+          "given": "Long high-intensity allocation but motivation_alignment_factor=1.0",
+          "when": "compute_burnout_risk() is called",
+          "then": "score == 0.0",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-030",
+          "name": "Burnout risk is 0.0 when there are no allocations",
+          "given": "Empty allocation list",
+          "when": "compute_burnout_risk() is called",
+          "then": "score == 0.0",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-031",
+          "name": "Burnout risk is 0.0 for low-intensity allocations (< 0.8 threshold)",
+          "given": "AllocationSlice spanning 60+ weeks at workload_intensity=0.79",
+          "when": "compute_burnout_risk() is called",
+          "then": "score == 0.0 (below high-intensity threshold)",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-032",
+          "name": "Bench risk > 0.7 when project ends in 7 days with no follow-on",
+          "given": "Active allocation ending in 7 days, no follow-on allocation",
+          "when": "compute_bench_risk() is called",
+          "then": "score > 0.7 (formula: (28-7)/28 = 0.75)",
+          "status": "pass",
+          "maps_to_requirement": "AC5"
+        },
+        {
+          "test_id": "TC-033",
+          "name": "Bench risk is very high when project ends tomorrow",
+          "given": "Active allocation ending in 1 day, no follow-on allocation",
+          "when": "compute_bench_risk() is called",
+          "then": "score > 0.7 (formula: (28-1)/28 ≈ 0.96)",
+          "status": "pass",
+          "maps_to_requirement": "AC5"
+        },
+        {
+          "test_id": "TC-034",
+          "name": "Bench risk is 0.0 when follow-on allocation starts within 28 days of project end",
+          "given": "Current allocation ends in 7 days; follow-on starts 5 days later",
+          "when": "compute_bench_risk([current, follow_on]) is called",
+          "then": "score == 0.0",
+          "status": "pass",
+          "maps_to_requirement": "AC5"
+        },
+        {
+          "test_id": "TC-035",
+          "name": "Bench risk is 1.0 when developer has no active allocation",
+          "given": "Only a past (inactive) allocation",
+          "when": "compute_bench_risk() is called",
+          "then": "score == 1.0 (already benched)",
+          "status": "pass",
+          "maps_to_requirement": "AC5"
+        },
+        {
+          "test_id": "TC-036",
+          "name": "Bench risk is 0.0 when project ends far in the future",
+          "given": "Active allocation ending in 20 weeks",
+          "when": "compute_bench_risk() is called",
+          "then": "score == 0.0 (clamped from negative formula result)",
+          "status": "pass",
+          "maps_to_requirement": "AC5"
+        },
+        {
+          "test_id": "TC-037",
+          "name": "Burnout badge maps correctly for score 0.0 (low)",
+          "given": "burnout_risk_score = 0.0",
+          "when": "burnout_badge(score) is called",
+          "then": "badge == 'low'",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-038",
+          "name": "Burnout badge maps correctly for score 0.39 (low)",
+          "given": "burnout_risk_score = 0.39",
+          "when": "burnout_badge(score) is called",
+          "then": "badge == 'low'",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-039",
+          "name": "Burnout badge maps correctly for score 0.4 (medium)",
+          "given": "burnout_risk_score = 0.4",
+          "when": "burnout_badge(score) is called",
+          "then": "badge == 'medium'",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-040",
+          "name": "Burnout badge maps correctly for score 0.6 (medium)",
+          "given": "burnout_risk_score = 0.6",
+          "when": "burnout_badge(score) is called",
+          "then": "badge == 'medium'",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-041",
+          "name": "Burnout badge maps correctly for score 0.61 (high)",
+          "given": "burnout_risk_score = 0.61",
+          "when": "burnout_badge(score) is called",
+          "then": "badge == 'high'",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-042",
+          "name": "Burnout badge maps correctly for score 1.0 (high)",
+          "given": "burnout_risk_score = 1.0",
+          "when": "burnout_badge(score) is called",
+          "then": "badge == 'high'",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-043",
+          "name": "Bench badge maps correctly for score 0.0 (low)",
+          "given": "bench_risk_score = 0.0",
+          "when": "bench_badge(score) is called",
+          "then": "badge == 'low'",
+          "status": "pass",
+          "maps_to_requirement": "AC5"
+        },
+        {
+          "test_id": "TC-044",
+          "name": "Bench badge maps correctly for score 0.39 (low)",
+          "given": "bench_risk_score = 0.39",
+          "when": "bench_badge(score) is called",
+          "then": "badge == 'low'",
+          "status": "pass",
+          "maps_to_requirement": "AC5"
+        },
+        {
+          "test_id": "TC-045",
+          "name": "Bench badge maps correctly for score 0.4 (medium)",
+          "given": "bench_risk_score = 0.4",
+          "when": "bench_badge(score) is called",
+          "then": "badge == 'medium'",
+          "status": "pass",
+          "maps_to_requirement": "AC5"
+        },
+        {
+          "test_id": "TC-046",
+          "name": "Bench badge maps correctly for score 0.7 (medium)",
+          "given": "bench_risk_score = 0.7",
+          "when": "bench_badge(score) is called",
+          "then": "badge == 'medium'",
+          "status": "pass",
+          "maps_to_requirement": "AC5"
+        },
+        {
+          "test_id": "TC-047",
+          "name": "Bench badge maps correctly for score 0.71 (high)",
+          "given": "bench_risk_score = 0.71",
+          "when": "bench_badge(score) is called",
+          "then": "badge == 'high'",
+          "status": "pass",
+          "maps_to_requirement": "AC5"
+        },
+        {
+          "test_id": "TC-048",
+          "name": "Bench badge maps correctly for score 1.0 (high)",
+          "given": "bench_risk_score = 1.0",
+          "when": "bench_badge(score) is called",
+          "then": "badge == 'high'",
+          "status": "pass",
+          "maps_to_requirement": "AC5"
+        },
+        {
+          "test_id": "TC-049",
+          "name": "compute_risk_scores returns all required fields",
+          "given": "An AllocationSlice spanning ~52 weeks at intensity 0.85",
+          "when": "compute_risk_scores() is called",
+          "then": "Result has: burnout_risk_score, bench_risk_score, burnout_risk_badge, bench_risk_badge, computed_at; both scores in [0.0,1.0]; both badges in {low,medium,high}",
+          "status": "pass",
+          "maps_to_requirement": "AC4"
+        },
+        {
+          "test_id": "TC-050",
+          "name": "compute_risk_scores with no allocations: burnout=0.0 (low), bench=1.0 (high)",
+          "given": "Empty allocation list",
+          "when": "compute_risk_scores() is called",
+          "then": "burnout_risk_score == 0.0, bench_risk_score == 1.0, badges are 'low' and 'high' respectively",
+          "status": "pass",
+          "maps_to_requirement": "AC5"
+        }
+      ]
+    },
+    {
+      "suite_id": "suite-gdpr-erasure",
+      "name": "GDPR Right-to-Erasure Tests",
+      "owner_agent": "qa-agent",
+      "test_cases": [
+        {
+          "test_id": "TC-051",
+          "name": "GDPR DELETE returns HTTP 204 No Content",
+          "given": "An existing DeveloperProfile in the mock DB",
+          "when": "DELETE /api/v1/developers/{id} is called with manager auth",
+          "then": "HTTP 204 with empty response body",
+          "status": "pass",
+          "maps_to_requirement": "AC9"
+        },
+        {
+          "test_id": "TC-052",
+          "name": "Subsequent GET after GDPR erasure returns HTTP 404",
+          "given": "A developer profile that has been deleted",
+          "when": "GET /api/v1/developers/{id} is called after DELETE",
+          "then": "HTTP 404 Not Found",
+          "status": "pass",
+          "maps_to_requirement": "AC9"
+        },
+        {
+          "test_id": "TC-053",
+          "name": "GDPR audit log records all 6 cascade steps",
+          "given": "An existing DeveloperProfile",
+          "when": "DELETE /api/v1/developers/{id} is called",
+          "then": "ErasureAuditLog is created with status='completed' and steps_completed containing all 6 entity classes",
+          "status": "pass",
+          "maps_to_requirement": "AC9"
+        },
+        {
+          "test_id": "TC-054",
+          "name": "DELETE non-existent developer returns 404 (negative test)",
+          "given": "A developer ID that does not exist in the DB",
+          "when": "DELETE /api/v1/developers/{id} is called",
+          "then": "HTTP 404 Not Found",
+          "status": "pass",
+          "maps_to_requirement": "AC9"
+        },
+        {
+          "test_id": "TC-055",
+          "name": "Developer cannot erase another developer's profile (negative test)",
+          "given": "Developer A attempts to delete Developer B's profile",
+          "when": "DELETE /api/v1/developers/{victim_id} is called with Developer A's JWT",
+          "then": "HTTP 403 Forbidden",
+          "status": "pass",
+          "maps_to_requirement": "AC9"
+        }
+      ]
+    },
+    {
+      "suite_id": "suite-feedback-analytics",
+      "name": "Feedback and Rejection-Rate Analytics Tests",
+      "owner_agent": "qa-agent",
+      "test_cases": [
+        {
+          "test_id": "TC-056",
+          "name": "POST /matches/feedback stores record and returns HTTP 201",
+          "given": "An existing MatchRecord and a developer submitting feedback (accepted=false)",
+          "when": "POST /api/v1/matches/feedback is called with developer_id, match_id, accepted=false",
+          "then": "HTTP 201; FeedbackRecord is added to DB; response contains id, developer_id, match_id, accepted, feedback_timestamp",
+          "status": "pass",
+          "maps_to_requirement": "AC10"
+        },
+        {
+          "test_id": "TC-057",
+          "name": "GET /analytics/rejection-rate returns correct ratio with >= 10 samples",
+          "given": "15 feedback records where 6 are rejections (rejected/total = 6/15 = 0.4)",
+          "when": "GET /api/v1/analytics/rejection-rate?developer_id={id} is called",
+          "then": "rejection_ratio ≈ 0.4, sample_count=15, accepted_count=9, rejected_count=6, min_sample_floor_met=true",
+          "status": "pass",
+          "maps_to_requirement": "AC10"
+        },
+        {
+          "test_id": "TC-058",
+          "name": "rejection_ratio is null when sample_count < minimum floor (10)",
+          "given": "3 feedback records (below the floor of 10)",
+          "when": "GET /api/v1/analytics/rejection-rate?developer_id={id} is called",
+          "then": "rejection_ratio=null, min_sample_floor_met=false, sample_count=3",
+          "status": "pass",
+          "maps_to_requirement": "AC10"
+        },
+        {
+          "test_id": "TC-059",
+          "name": "POST /matches/feedback returns 404 for non-existent match (negative test)",
+          "given": "A match_id that does not exist in the DB",
+          "when": "POST /api/v1/matches/feedback is called",
+          "then": "HTTP 404 Not Found",
+          "status": "pass",
+          "maps_to_requirement": "AC10"
+        },
+        {
+          "test_id": "TC-060",
+          "name": "POST /matches/feedback returns 422 when 'accepted' field is missing (negative test)",
+          "given": "A feedback request body without the required 'accepted' boolean",
+          "when": "POST /api/v1/matches/feedback is called",
+          "then": "HTTP 422 Unprocessable Entity",
+          "status": "pass",
+          "maps_to_requirement": "AC10"
+        },
+        {
+          "test_id": "TC-061",
+          "name": "GET /analytics/rejection-rate returns 422 without developer_id (negative test)",
+          "given": "GET request with no developer_id query parameter",
+          "when": "GET /api/v1/analytics/rejection-rate is called",
+          "then": "HTTP 422 Unprocessable Entity",
+          "status": "pass",
+          "maps_to_requirement": "AC10"
+        }
+      ]
+    },
+    {
+      "suite_id": "suite-weight-config",
+      "name": "Weight Configuration API Tests",
+      "owner_agent": "qa-agent",
+      "test_cases": [
+        {
+          "test_id": "TC-062",
+          "name": "GET /config/weights returns the default weight configuration",
+          "given": "The singleton WeightConfig row with default values (w1=0.30, ..., w5=0.10)",
+          "when": "GET /api/v1/config/weights is called",
+          "then": "HTTP 200; response contains w1=0.30, w2=0.25, w3=0.20, w4=0.15, w5=0.10, version=1",
+          "status": "pass",
+          "maps_to_requirement": "AC6"
+        },
+        {
+          "test_id": "TC-063",
+          "name": "PUT /config/weights updates weights and increments version",
+          "given": "A manager submitting new valid weights (w1=0.40, w2=0.25, w3=0.20, w4=0.10, w5=0.05, sum=1.0)",
+          "when": "PUT /api/v1/config/weights is called",
+          "then": "HTTP 200; response reflects updated weights; version incremented to 2",
+          "status": "pass",
+          "maps_to_requirement": "AC6"
+        },
+        {
+          "test_id": "TC-064",
+          "name": "Weight change causes deterministic score delta (API unit test)",
+          "given": "A developer with high skill/low behavioral scores against default and skill-heavy weights",
+          "when": "compute_match_score() is called with both weight sets",
+          "then": "Score delta (skill-heavy minus default) >= 0.04",
+          "status": "pass",
+          "maps_to_requirement": "AC6"
+        },
+        {
+          "test_id": "TC-065",
+          "name": "PUT /config/weights returns 422 for sum != 1.0 (negative test)",
+          "given": "Weight payload where w1+w2+w3+w4+w5 = 1.05 (exceeds 1.0±0.001 tolerance)",
+          "when": "PUT /api/v1/config/weights is called",
+          "then": "HTTP 422 Unprocessable Entity (Pydantic model_validator rejects sum)",
+          "status": "pass",
+          "maps_to_requirement": "AC6"
+        },
+        {
+          "test_id": "TC-066",
+          "name": "PUT /config/weights returns 422 for negative weight (negative test)",
+          "given": "Weight payload with w1=-0.10 (violates Field(ge=0.0))",
+          "when": "PUT /api/v1/config/weights is called",
+          "then": "HTTP 422 Unprocessable Entity",
+          "status": "pass",
+          "maps_to_requirement": "AC6"
+        },
+        {
+          "test_id": "TC-067",
+          "name": "PUT /config/weights by developer role returns 403 (negative test)",
+          "given": "A user with role='developer' (not manager) submitting valid weights",
+          "when": "PUT /api/v1/config/weights is called",
+          "then": "HTTP 403 Forbidden",
+          "status": "pass",
+          "maps_to_requirement": "AC6"
+        },
+        {
+          "test_id": "TC-068",
+          "name": "PUT /config/weights returns 422 for weight > 1.0 (negative test)",
+          "given": "Weight payload with w1=1.10 (violates Field(le=1.0))",
+          "when": "PUT /api/v1/config/weights is called",
+          "then": "HTTP 422 Unprocessable Entity",
+          "status": "pass",
+          "maps_to_requirement": "AC6"
+        }
+      ]
+    },
+    {
+      "suite_id": "suite-integration",
+      "name": "Full Pipeline Integration Tests",
+      "owner_agent": "qa-agent",
+      "test_cases": [
+        {
+          "test_id": "TC-069",
+          "name": "POST /matches returns valid response schema with all required fields",
+          "given": "A complete DeveloperProfile (Python/FastAPI/PostgreSQL, Europe/Warsaw) and ProjectProfile mocked through dependency injection",
+          "when": "POST /api/v1/matches is called",
+          "then": "HTTP 201; response contains match_score in [0.0,1.0], explanation >= 50 chars, risks list, growth_potential list, component_scores, weights_snapshot, match_id, developer_id, project_id, created_at",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-070",
+          "name": "Match endpoint latency is under 500ms at p95",
+          "given": "10 mock-DB POST /matches calls using dependency_overrides",
+          "when": "Request latencies are measured",
+          "then": "p95 latency < 500ms (algorithmic portion excluding Claude and live DB)",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-071",
+          "name": "Developer dashboard: GET /matches returns >= 1 project card with required fields",
+          "given": "A developer with at least one MatchRecord in the mock DB",
+          "when": "GET /api/v1/developers/{id}/matches is called",
+          "then": "Response contains >= 1 match with match_score, explanation, risks, growth_potential, match_id, developer_id, project_id",
+          "status": "pass",
+          "maps_to_requirement": "AC7"
+        },
+        {
+          "test_id": "TC-072",
+          "name": "Manager risk endpoint returns badges without raw behavioral vectors",
+          "given": "A DeveloperProfile in the mock DB with no active allocations",
+          "when": "GET /api/v1/developers/{id}/risk is called with manager auth",
+          "then": "Response contains burnout_risk_score, bench_risk_score, burnout_risk_badge, bench_risk_badge; does NOT contain work_style_vector or motivation_vector",
+          "status": "pass",
+          "maps_to_requirement": "AC8"
+        },
+        {
+          "test_id": "TC-073",
+          "name": "Developer profile GET response excludes raw behavioral vectors",
+          "given": "A DeveloperProfile with work_style_vector and motivation_vector stored in DB",
+          "when": "GET /api/v1/developers/{id} is called",
+          "then": "Response contains id, skills, experience_years, timezone, embedding_status; does NOT contain work_style_vector or motivation_vector",
+          "status": "pass",
+          "maps_to_requirement": "AC8"
+        },
+        {
+          "test_id": "TC-074",
+          "name": "Full pipeline: profile ingest → score → explain → response",
+          "given": "A complete developer and project profile submitted as JSON with mock DB session",
+          "when": "POST /api/v1/matches executes the full algorithmic pipeline",
+          "then": "HTTP 201; match_score in [0.0,1.0]; explanation >= 50 chars; MatchRecord persisted to session; explanation_source='stub_pending'; no raw vectors in response",
+          "status": "pass",
+          "maps_to_requirement": "AC13"
+        },
+        {
+          "test_id": "TC-075",
+          "name": "End-to-end: create match then submit feedback",
+          "given": "A complete match is created via POST /matches; the resulting match_id is used in a feedback submission",
+          "when": "POST /matches/feedback is called with the match_id from the first request",
+          "then": "HTTP 201 for feedback; feedback body contains match_id, accepted=true, feedback_timestamp",
+          "status": "pass",
+          "maps_to_requirement": "AC13"
+        },
+        {
+          "test_id": "TC-076",
+          "name": "POST /matches returns 422 for missing required field (negative test)",
+          "given": "A match request where the developer_profile is missing the 'skills' array",
+          "when": "POST /api/v1/matches is called",
+          "then": "HTTP 422 Unprocessable Entity",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        },
+        {
+          "test_id": "TC-077",
+          "name": "POST /matches returns 422 for work_style vector of wrong length (negative test)",
+          "given": "A match request where work_style has 5 elements instead of required 8",
+          "when": "POST /api/v1/matches is called",
+          "then": "HTTP 422 Unprocessable Entity",
+          "status": "pass",
+          "maps_to_requirement": "AC1"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total": 77,
+    "passed": 77,
+    "failed": 0,
+    "skipped": 0,
+    "coverage_note": "All 13 acceptance criteria (AC1–AC13) are covered by at least one test case. Good-match expected range: score >= 0.75 (TC-001). Bad-match expected range: score <= 0.45 (TC-002)."
+  }
+}

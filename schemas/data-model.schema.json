@@ -1,0 +1,35 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "DataModel",
+    "description": "Entity definitions for the architect's data model (SPEC §3.3). Deliberately lenient on top-level extras (database, gdpr, etc.) but strict that every entity declares typed fields so downstream agents can rely on the shape.",
+    "type": "object",
+    "required": ["entities"],
+    "additionalProperties": true,
+    "properties": {
+        "entities": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["name", "fields"],
+                "additionalProperties": true,
+                "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "fields": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "required": ["name", "type"],
+                            "additionalProperties": true,
+                            "properties": {
+                                "name": { "type": "string", "minLength": 1 },
+                                "type": { "type": "string", "minLength": 1 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

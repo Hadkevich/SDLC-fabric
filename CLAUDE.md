@@ -1,0 +1,59 @@
+# Agentic SDLC — Project Instructions
+
+## Goal
+Deliver small real software projects end-to-end using a multi-agent pipeline with deterministic handoffs and machine-readable artifacts.
+
+## Rules
+- Follow the spec in `SPEC.md` exactly.
+- Produce structured JSON artifacts — never substitute prose for a required JSON file.
+- Do not change requirements without explicit product-agent output.
+- Do not write code before architecture artifacts exist.
+- Always run tests before marking any stage complete.
+- Log every stage transition as an event in `events.log.jsonl`.
+- Each agent writes only the artifacts assigned to its stage — no cross-stage writes.
+- Escalate on ambiguity, repeated failures (> max_retries), or unsafe requests.
+
+## Project layout
+Every project is self-contained under `projects/<project-name>/`:
+```
+projects/<project-name>/
+  artifacts/          ← all pipeline JSON artifacts + events.log.jsonl
+    adr/
+  <source files>      ← actual code produced by developer-agent
+  tests/              ← tests produced by qa-agent
+```
+Global example/reference artifacts stay in the root `artifacts/` folder (do not write run outputs there).
+
+## Required artifacts (per run)
+All paths below are relative to `projects/<project-name>/artifacts/`.
+
+| File | Owner | Schema |
+|------|-------|--------|
+| `requirements.json` | product-agent | `schemas/requirements.schema.json` |
+| `workplan.json` | planner-agent | `schemas/workplan.schema.json` |
+| `architecture.json` | architect-agent | `schemas/architecture.schema.json` |
+| `api-contracts.json` | architect-agent | `schemas/api-contracts.schema.json` (OpenAPI 3.x) |
+| `data-model.json` | architect-agent | `schemas/data-model.schema.json` |
+| `adr/*.json` | architect-agent | `schemas/adr.schema.json` |
+| `code_spec.json` | developer-agent | `schemas/code_spec.schema.json` |
+| `test_plan.json` | qa-agent | `schemas/test_plan.schema.json` |
+| `review_report.json` | reviewer-agent | `schemas/review_report.schema.json` |
+| `release_report.json` | devops-agent | `schemas/release_report.schema.json` |
+| `workflow_state.json` | orchestrator-agent | `schemas/workflow_state.schema.json` |
+| `events.log.jsonl` | all agents (append-only) | `schemas/event.schema.json` |
+
+## Stage gates (must pass before advancing)
+- `task_decomposition` requires valid `requirements.json`
+- `planning_architecture` requires valid `workplan.json`
+- `code_generation` requires valid `architecture.json` + `api-contracts.json`
+- `code_review` requires valid `code_spec.json`; a `rejected` verdict triggers a bounded
+  review→fix rework loop (re-dispatches the developer subtree, `max_rework` default 2) —
+  it never advances to QA/deploy
+- `testing_validation` requires valid `code_spec.json` (planner orders it **after** `code_review`)
+- `deployment` requires `review_report.json` verdict ∈ {approved, approved_with_comments} AND `test_plan.json` summary.failed == 0
+
+## Workflow Reference
+The agentic loop diagram is at `workflow/mermaid.md`. All agents should use it as the authoritative visual reference for stage sequence, ownership, and escalation paths.
+
+## Event log format
+Every agent appends one JSONL event on completion. Fields: event_id (uuid), workflow_id, stage, agent, status (success|failure|blocked|retry), input_refs[], output_refs[], summary, blocking_issues[], retry_count, timestamp (ISO 8601).

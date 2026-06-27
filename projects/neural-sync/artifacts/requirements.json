@@ -1,0 +1,85 @@
+{
+  "spec_version": "v1",
+  "id": "neural-sync-req-v1",
+  "title": "NEURAL SYNC — Operator–Project Alignment Platform (Phase 1 MVP)",
+  "problem_statement": "Traditional developer-to-project allocation relies on skill-set matching alone, ignoring behavioral traits, motivation alignment, work-style compatibility, and career trajectory. This produces suboptimal team composition, elevated attrition, burnout, and low developer satisfaction. NEURAL SYNC must replace static skill-matching with a multi-dimensional, AI-driven compatibility engine that: (1) scores developer↔project fit across five dimensions (skills, work style, motivation, timezone, growth potential), (2) generates a human-readable explanation for every match decision via a configurable LLM explanation layer, (3) predicts bench and burnout risk before they materialize, and (4) continuously re-optimizes allocation so that the system never becomes static. A match the system cannot explain is a broken match.",
+  "scope": {
+    "in_scope": [
+      "Developer profile ingestion: structured DeveloperProfile schema (id, skills, experience_years, preferred_stack, work_style vector, motivation_vector, timezone, availability_hours, career_goals, project history)",
+      "Project profile ingestion: structured ProjectProfile schema (id, required_skills, team_structure, workload_intensity, innovation_level, timezone_overlap_required, duration_weeks, growth_opportunities)",
+      "Five-dimension matching engine: MATCH_SCORE = w1·skill_score + w2·workstyle_score + w3·motivation_score + w4·timezone_score + w5·growth_score with per-deployment configurable weights",
+      "AI explanation layer (configurable LLM provider, Phase-1 Gemini): per-match natural-language output covering match rationale, identified risks, and growth potential",
+      "Bench-risk prediction: risk score per developer based on project end dates and allocation schedule",
+      "Burnout-risk detection: risk score derived from over-allocation signals, workload intensity, and motivation alignment",
+      "REST API (FastAPI) with OpenAPI 3.1 contracts for all resources",
+      "PostgreSQL for structured profile and match-history storage",
+      "Vector similarity search for behavioral and skill embeddings (embedding store choice resolved in architecture phase)",
+      "Developer dashboard view: ranked recommended projects with match scores and LLM-generated explanations",
+      "Manager dashboard view: team composition health, risk alerts, allocation suggestions",
+      "Match feedback endpoint: developer accepts/rejects a recommendation; rejection rate queryable per developer",
+      "GDPR right-to-erasure: full profile and embedding deletion on request",
+      "LLM prompt definitions stored as versioned, auditable artifacts",
+      "Test suite covering at least one good-match scenario and one bad-match scenario with documented expected score ranges"
+    ],
+    "out_of_scope": [
+      "Live integration with external data sources: Git repos, Jira, Slack, HR systems (deferred to Phase 2)",
+      "Admin weight-tuning UI panel (weights configurable via API configuration endpoint only in Phase 1)",
+      "Real-time streaming reallocation (batch re-optimization is sufficient for Phase 1)",
+      "Mobile native applications",
+      "SSO / external identity-provider integration (auth model determined by open question resolution)",
+      "Multi-tenant / multi-organization support",
+      "CV or document parsing pipeline (profile data ingested as structured JSON in Phase 1)",
+      "Production-scale vector DB managed service deployment (architecture phase decides embedded vs managed)"
+    ]
+  },
+  "non_goals": [
+    "Replacing human management decisions — the system advises, humans decide",
+    "Optimizing for short-term project throughput at the expense of developer wellbeing",
+    "Functioning as a generic HR management or payroll system",
+    "Exposing raw behavioral vectors or motivation scores directly to unauthorized UI consumers",
+    "Achieving perfect allocation autonomously without a feedback loop from developers"
+  ],
+  "constraints": [
+    "Every match response MUST include a non-empty LLM-generated natural-language explanation; skill-only scoring without the behavioral and explainability layer is a hard failure condition",
+    "Static allocation without re-optimization capability is a hard failure condition; the system must expose at least a re-score/re-rank endpoint that can be triggered on schedule or on demand",
+    "Match recommendation rejection rate MUST be measurable from day 1; rejection feedback collection is not optional",
+    "GDPR: all PII must be erasable on request; no data retained beyond consent scope; embeddings must be purged alongside structured records",
+    "Match API end-to-end latency MUST be ≤ 500ms at p95 (including or excluding LLM call to be confirmed in open questions; async explanation is acceptable if score + stub are returned synchronously)",
+    "System must be horizontally scalable to a developer pool of 10,000+ without architectural rework",
+    "Claude Code agents are the mandated agentic build layer (Task04 §3 'CLAUDE CODE AGENT INTEGRATION'), satisfied by the multi-agent SDLC pipeline that produced this system. The runtime explanation LLM is provider-agnostic and configurable: the Phase-1 implementation uses Google Gemini (gemini-1.5-flash, free tier); Claude API (claude-3-5-haiku) is a supported alternate. The model identifier lives in the versioned prompt artifact, so the provider/model is swappable with no source change. Prompts must be versioned and stored as auditable artifacts, not hardcoded strings.",
+    "Tech stack is constrained to: Python/FastAPI (backend), React (frontend), a configurable LLM explanation provider (Phase-1: Google Gemini; Claude API supported), PostgreSQL (relational store), vector-compatible storage (technology resolved in architecture phase)",
+    "Matching weights w1–w5 must be configurable without a code deployment (via API or config file)"
+  ],
+  "acceptance_criteria": [
+    "POST /api/v1/matches with a valid DeveloperProfile JSON and ProjectProfile JSON returns a response containing match_score (float 0.0–1.0), explanation (non-empty string ≥ 50 chars), risks (list, may be empty), and growth_potential (list, may be empty) within 500ms at p95 under nominal load",
+    "Given two profile pairs where Pair A has identical skills but opposing work_style vectors compared to Pair B (aligned work_style), the match_score for Pair A is strictly lower than for Pair B, confirming the behavioral dimension is active and weighted",
+    "The LLM-generated explanation for any match includes at minimum: one statement about skill alignment, one statement about work-style or behavioral alignment, and one statement about growth or career potential",
+    "GET /api/v1/developers/{id}/risk for a developer with ≥ 48 consecutive weeks of allocation at workload_intensity ≥ 0.8 returns burnout_risk_score > 0.6",
+    "GET /api/v1/developers/{id}/risk for a developer whose current project end_date is within 28 days and has no follow-on allocation returns bench_risk_score > 0.7",
+    "PUT /api/v1/config/weights with a valid weight map causes subsequent POST /api/v1/matches calls on identical profile pairs to return match_scores that reflect the new weights, verified by a deterministic unit test with known inputs and expected score deltas",
+    "The Developer dashboard view renders ≥ 1 recommended project cards (each showing match_score and LLM-generated explanation) for any developer who has a complete profile with all required fields populated",
+    "The Manager dashboard view displays per-developer risk badges (bench, burnout) and team composition health without exposing raw behavioral vectors or motivation scalar values to the UI layer",
+    "DELETE /api/v1/developers/{id} purges the developer's structured profile, all associated vector embeddings, and all match history records, returning HTTP 204; a subsequent GET /api/v1/developers/{id} returns HTTP 404",
+    "POST /api/v1/matches/feedback with developer_id, match_id, and accepted (boolean) stores the feedback record; GET /api/v1/analytics/rejection-rate?developer_id={id} returns the rejection ratio computed from stored feedback with ≥ 1 sample",
+    "The automated test suite contains a labeled 'good match' test (high skill + work_style + motivation alignment) where match_score ≥ 0.75, and a labeled 'bad match' test (skill overlap but behavioral mismatch) where match_score ≤ 0.45, with both expected ranges documented in test_plan.json",
+    "All LLM prompt templates are stored in a versioned artifact file (not inline code); code_spec.json references the prompt artifact; changing a prompt template does not require modifying application source files",
+    "An automated integration test exercises the full match pipeline (profile ingest → embed → score → LLM explain → response) against a local or mocked environment and passes in CI"
+  ],
+  "risks": [
+    "LLM API latency: synchronous explanation calls may push match response time above 500ms; mitigation: return algorithmic score synchronously and generate explanation asynchronously with caching for repeated profile pairs",
+    "Weight misconfiguration: subjective default weights may produce counterintuitive matches and erode developer trust early; mitigation: ship default weights validated against the good-match and bad-match test scenarios defined in acceptance criteria",
+    "GDPR scope creep: Phase 2 external-source integration (Slack, Git) introduces sensitive PII before erasure patterns are hardened; mitigation: erasure pipeline must be production-ready in Phase 1 before external sources are added",
+    "Sparse rejection-rate signal: at MVP scale the 50% rejection threshold may be statistically unreliable; mitigation: enforce a minimum sample floor of ≥ 10 feedback records before surfacing the rejection-rate alert to managers",
+    "Vector search cold-start: embedding similarity quality degrades with very small datasets; mitigation: include a synthetic seed dataset of ≥ 50 developer and ≥ 20 project profiles for development and testing",
+    "LLM prompt drift: model version upgrades can silently alter explanation tone or structure; mitigation: snapshot expected explanation structure in the test suite and add a regression check on format (presence of skill, behavioral, and growth sentences)",
+    "Behavioral vector subjectivity: self-reported work_style and motivation values may be inaccurate, reducing match quality; mitigation: flag profiles where behavioral vectors are self-reported vs. inferred, and document this limitation in the system"
+  ],
+  "open_questions": [
+    "Vector storage: should Phase 1 use an embedded solution (pgvector on PostgreSQL, or Chroma in-process) to minimize operational overhead, or a managed service (Pinecone, Weaviate) for future scalability? Decision blocks DB schema design.",
+    "Latency SLA scope: is the 500ms p95 target measured end-to-end including the LLM API call, or only for the algorithmic scoring step (with async explanation delivery acceptable)? Determines whether synchronous LLM calls are permissible.",
+    "Authentication model: does Phase 1 require user login (session-based or JWT) for the developer and manager dashboard views, or is API-key-based access sufficient for MVP? Affects frontend and API design.",
+    "Seed data availability: are there existing developer or project profiles available for testing, or must the team generate a fully synthetic dataset? Determines test-data pipeline scope.",
+    "LLM provider/model selection: Phase-1 uses Google Gemini (gemini-1.5-flash, free tier). Claude API (claude-3-5-haiku) is a supported alternate. The model identifier is stored in the versioned prompt artifact, enabling provider/model swaps with no source change.",
+    "Dashboard visual theme: is the cyberpunk aesthetic required for the Phase 1 dashboard, or is a functional but unstyled UI acceptable for MVP with theming deferred to Phase 2?"
+  ]
+}

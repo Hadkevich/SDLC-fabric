@@ -1,0 +1,1973 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "NEURAL SYNC API",
+    "version": "1.0.0",
+    "description": "Multi-dimensional AI-driven developer–project compatibility engine. All protected routes require JWT Bearer authentication per ADR-002. The 500 ms p95 latency SLA applies to the synchronous POST /matches response per ADR-003. LLM explanations are generated asynchronously (Phase-1: Google Gemini; Claude API is a supported alternate per ADR-004); the initial response always contains a deterministic stub (≥50 chars) per ADR-003/ADR-004. Error envelope on all 4xx/5xx: {error_code, message, request_id}.",
+    "contact": {
+      "name": "NEURAL SYNC Engineering",
+      "email": "engineering@neural-sync.example.com"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8000/api/v1",
+      "description": "Local development server"
+    },
+    {
+      "url": "https://neural-sync.example.com/api/v1",
+      "description": "Production server"
+    }
+  ],
+  "security": [
+    { "BearerAuth": [] }
+  ],
+  "tags": [
+    { "name": "auth",       "description": "Authentication and token management (ADR-002)" },
+    { "name": "developers", "description": "Developer profile CRUD, risk scores, and recommendations" },
+    { "name": "projects",   "description": "Project profile CRUD" },
+    { "name": "matches",    "description": "Five-dimension matching engine and explanation polling" },
+    { "name": "config",     "description": "Matching weight configuration (manager role)" },
+    { "name": "analytics",  "description": "Feedback collection and rejection-rate analytics" },
+    { "name": "risk",       "description": "Team-level risk aggregation and batch refresh" },
+    { "name": "admin",      "description": "GDPR erasure audit and re-embedding triggers (manager role)" },
+    { "name": "health",     "description": "Liveness and readiness probes" }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["health"],
+        "summary": "Service health check",
+        "description": "Returns service health status. No authentication required. Add ?verbose=true for subsystem details including the LLM explanation queue depth and vector-store status.",
+        "operationId": "getHealth",
+        "security": [],
+        "parameters": [
+          {
+            "name": "verbose",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "boolean", "default": false },
+            "description": "Include per-subsystem status and Claude queue depth"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Service is healthy or degraded (partial functionality)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" },
+                "example": {
+                  "status": "healthy",
+                  "version": "1.0.0",
+                  "db_status": "ok",
+                  "vector_store_status": "ok",
+                  "timestamp": "2026-06-26T10:00:00Z"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service is unhealthy (database or critical dependency unavailable)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Obtain JWT access token and refresh token",
+        "description": "Authenticates with username + password. Returns a JWT access token (HS256, TTL=1h; payload: sub, role, iat, exp) and sets an opaque refresh token (TTL=7d) in an HttpOnly cookie. Per ADR-002: no SSO in Phase 1; passwords hashed with bcrypt.",
+        "operationId": "login",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LoginRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful",
+            "headers": {
+              "Set-Cookie": {
+                "description": "HttpOnly refresh_token cookie; SameSite=Strict; TTL=7d",
+                "schema": { "type": "string" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LoginResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request body",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Invalid username or password",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "422": {
+            "description": "Validation error (e.g. missing required field)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Refresh JWT access token",
+        "description": "Issues a new access_token using the refresh_token from the HttpOnly cookie. The refresh token is rotated on each successful call.",
+        "operationId": "refreshToken",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Access token refreshed",
+            "headers": {
+              "Set-Cookie": {
+                "description": "Rotated HttpOnly refresh_token cookie",
+                "schema": { "type": "string" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LoginResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Refresh token missing, expired, or invalid",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/developers": {
+      "post": {
+        "tags": ["developers"],
+        "summary": "Ingest a new developer profile",
+        "description": "Creates a DeveloperProfile. All required fields are validated (skills, work_style vector len=8, motivation_vector len=8, IANA timezone, etc.). Server generates a UUID if id is omitted. Enqueues embedding generation as a background task; the profile is immediately accessible with embedding_status='pending'.",
+        "operationId": "createDeveloper",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/DeveloperProfileCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Developer profile created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeveloperProfile" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid profile data (e.g. work_style vector length ≠ 8)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Unauthorized — valid JWT required",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "409": {
+            "description": "Developer with provided id already exists",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "422": {
+            "description": "Pydantic validation error",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/developers/{developer_id}": {
+      "get": {
+        "tags": ["developers"],
+        "summary": "Get a developer profile by ID",
+        "description": "Returns the full DeveloperProfile. Developers (role=developer) may only retrieve their own profile; managers may retrieve any profile. Returns HTTP 404 if the developer was never created or was erased via DELETE.",
+        "operationId": "getDeveloper",
+        "parameters": [
+          { "$ref": "#/components/parameters/DeveloperIdPath" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Developer profile found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeveloperProfile" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — developer role accessing another developer's profile",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "Developer not found (never created, or erased via GDPR DELETE)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": {
+                  "error_code": "NOT_FOUND",
+                  "message": "Developer with id '3fa85f64-5717-4562-b3fc-2c963f66afa6' not found",
+                  "request_id": "req_abc123"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": ["developers"],
+        "summary": "Replace a developer profile",
+        "description": "Full replacement of a DeveloperProfile. All required fields must be present. Re-enqueues embedding generation on success. Developers may only update their own profile.",
+        "operationId": "updateDeveloper",
+        "parameters": [
+          { "$ref": "#/components/parameters/DeveloperIdPath" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/DeveloperProfileCreate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Developer profile updated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeveloperProfile" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid profile data",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "Developer not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "422": {
+            "description": "Validation error",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["developers"],
+        "summary": "GDPR right-to-erasure: full cascade deletion",
+        "description": "Performs atomic cascade deletion within a single PostgreSQL transaction: (1) DeveloperProfile row, (2) developer_embeddings rows, (3) all MatchRecord rows, (4) all FeedbackRecord rows, (5) all AllocationRecord rows, (6) ExplanationCache entries keyed to the developer. Creates an ErasureAuditLog entry. On transaction failure, rolls back completely and returns HTTP 500 — developer data remains intact. A subsequent GET /developers/{developer_id} returns HTTP 404 after successful erasure.",
+        "operationId": "deleteDeveloper",
+        "parameters": [
+          { "$ref": "#/components/parameters/DeveloperIdPath" }
+        ],
+        "responses": {
+          "204": {
+            "description": "Developer fully erased — GDPR compliant. No response body."
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — only the developer themselves or manager role may request erasure",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "Developer not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "500": {
+            "description": "Erasure transaction rolled back — developer data is intact. Check erasure audit log.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": {
+                  "error_code": "ERASURE_FAILED",
+                  "message": "Cascade deletion rolled back. Developer data is intact. erasure_request_id: 'abc-123'",
+                  "request_id": "req_xyz789"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/developers/{developer_id}/risk": {
+      "get": {
+        "tags": ["developers"],
+        "summary": "Get burnout and bench risk scores for a developer",
+        "description": "Returns burnout_risk_score (>0.6 when ≥48 consecutive weeks at workload_intensity ≥0.8) and bench_risk_score (>0.7 when current project ends within 28 days with no follow-on allocation). Scores computed from AllocationRecord history. Raw behavioral vectors are never exposed.",
+        "operationId": "getDeveloperRisk",
+        "parameters": [
+          { "$ref": "#/components/parameters/DeveloperIdPath" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Risk scores returned",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RiskResponse" },
+                "example": {
+                  "developer_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                  "burnout_risk_score": 0.72,
+                  "bench_risk_score": 0.15,
+                  "burnout_risk_badge": "high",
+                  "bench_risk_badge": "low",
+                  "computed_at": "2026-06-26T10:00:00Z"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "Developer not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/developers/{developer_id}/matches": {
+      "get": {
+        "tags": ["developers"],
+        "summary": "Get ranked project recommendations for a developer",
+        "description": "Returns top-K MatchRecord objects ranked by match_score descending. Used by the Developer Dashboard to render recommended project cards with explanation and risk tags. Developers may only query their own matches.",
+        "operationId": "getDeveloperMatches",
+        "parameters": [
+          { "$ref": "#/components/parameters/DeveloperIdPath" },
+          {
+            "name": "top_k",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 10 },
+            "description": "Maximum number of recommendations to return"
+          },
+          {
+            "name": "min_score",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+            "description": "Filter results to match_score ≥ min_score"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ranked match recommendations",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeveloperMatchesResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "Developer not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/projects": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Ingest a new project profile",
+        "description": "Creates a ProjectProfile. Validates workload_intensity ∈ [0.0, 1.0] and innovation_level ∈ [0.0, 1.0]. Enqueues skill embedding generation as a background task. Manager role required.",
+        "operationId": "createProject",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProjectProfileCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Project profile created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProjectProfile" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid profile data",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required to create projects",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "409": {
+            "description": "Project with provided id already exists",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "422": {
+            "description": "Validation error",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}": {
+      "get": {
+        "tags": ["projects"],
+        "summary": "Get a project profile by ID",
+        "operationId": "getProject",
+        "parameters": [
+          { "$ref": "#/components/parameters/ProjectIdPath" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project profile found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProjectProfile" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      },
+      "put": {
+        "tags": ["projects"],
+        "summary": "Replace a project profile",
+        "description": "Full replacement of a ProjectProfile. Re-enqueues embedding generation on success. Manager role required.",
+        "operationId": "updateProject",
+        "parameters": [
+          { "$ref": "#/components/parameters/ProjectIdPath" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProjectProfileCreate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Project profile updated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProjectProfile" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid profile data",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "422": {
+            "description": "Validation error",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["projects"],
+        "summary": "Delete a project profile",
+        "description": "Deletes a ProjectProfile and its embeddings. Historical MatchRecord rows are retained for analytics. Manager role required.",
+        "operationId": "deleteProject",
+        "parameters": [
+          { "$ref": "#/components/parameters/ProjectIdPath" }
+        ],
+        "responses": {
+          "204": {
+            "description": "Project profile deleted. No response body."
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/matches": {
+      "post": {
+        "tags": ["matches"],
+        "summary": "Compute a five-dimension developer–project match score",
+        "description": "Accepts inline DeveloperProfile and ProjectProfile objects. Computes MATCH_SCORE = w1·skill_score + w2·workstyle_score + w3·motivation_score + w4·timezone_score + w5·growth_score using the current WeightConfig (loaded fresh from DB per architecture decision). Returns within 500ms p95 per ADR-003. The explanation field is always a non-empty string ≥50 chars: a cached full LLM explanation on cache hit, or a deterministic algorithmic stub on cache miss. A background task enqueues the async LLM call (ADR-004: configurable provider; Phase-1 default is Google Gemini gemini-1.5-flash; Claude API claude-3-5-haiku is a supported alternate). The MatchRecord is persisted; use GET /matches/{match_id} to poll for the updated explanation.",
+        "operationId": "createMatch",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MatchRequest" },
+              "example": {
+                "developer_profile": {
+                  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                  "skills": ["Python", "FastAPI", "PostgreSQL", "Docker"],
+                  "experience_years": 5,
+                  "preferred_stack": ["Python", "FastAPI"],
+                  "work_style": [0.8, 0.6, 0.7, 0.9, 0.7, 0.8, 0.5, 0.4],
+                  "motivation_vector": [0.9, 0.8, 0.5, 0.6, 0.7, 0.6, 0.8, 0.9],
+                  "timezone": "Europe/Warsaw",
+                  "availability_hours": 40,
+                  "career_goals": ["technical leadership", "distributed systems"],
+                  "project_history": [],
+                  "is_self_reported": true
+                },
+                "project_profile": {
+                  "id": "7e2b4f81-1234-4abc-9def-0a1b2c3d4e5f",
+                  "name": "AI Platform Core",
+                  "required_skills": ["Python", "FastAPI", "PostgreSQL"],
+                  "team_structure": "Cross-functional agile squad of 6, async-first",
+                  "workload_intensity": 0.7,
+                  "innovation_level": 0.9,
+                  "timezone_overlap_required": "UTC+1 to UTC+3",
+                  "duration_weeks": 24,
+                  "growth_opportunities": ["distributed systems", "ML pipeline", "technical leadership"]
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Match computed and persisted within 500ms p95 SLA",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MatchResponse" },
+                "example": {
+                  "match_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+                  "developer_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                  "project_id": "7e2b4f81-1234-4abc-9def-0a1b2c3d4e5f",
+                  "match_score": 0.83,
+                  "explanation": "Skill alignment: Strong overlap in Python, FastAPI and PostgreSQL covering 3 of 3 required skills. Behavioral fit: High collaboration and innovation scores align with the team's async-first, innovation-focused culture. Growth potential: Distributed systems and technical leadership goals match project's core growth opportunities.",
+                  "explanation_source": "stub_pending",
+                  "risks": ["Moderate timezone delta (UTC+2 vs UTC+1 to UTC+3) may compress synchronous windows"],
+                  "growth_potential": ["Distributed systems architecture", "Technical leadership track", "ML pipeline exposure"],
+                  "component_scores": {
+                    "skill_score": 0.92,
+                    "workstyle_score": 0.81,
+                    "motivation_score": 0.87,
+                    "timezone_score": 0.78,
+                    "growth_score": 0.79
+                  },
+                  "weights_snapshot": { "w1": 0.30, "w2": 0.25, "w3": 0.20, "w4": 0.10, "w5": 0.15 },
+                  "vector_search_degraded": false,
+                  "behavioral_data_unavailable": false,
+                  "created_at": "2026-06-26T10:00:00Z"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "422": {
+            "description": "Validation error (e.g. work_style vector wrong length)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "503": {
+            "description": "Service temporarily unavailable — DB connection pool exhausted",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": { "type": "integer", "example": 2 }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": {
+                  "error_code": "SERVICE_UNAVAILABLE",
+                  "message": "Connection pool exhausted. Please retry after 2 seconds.",
+                  "request_id": "req_xyz001"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/matches/feedback": {
+      "post": {
+        "tags": ["matches"],
+        "summary": "Submit match recommendation feedback",
+        "description": "Stores a FeedbackRecord. The developer accepts (accepted=true) or rejects (accepted=false) a match recommendation. Rejection counts accumulate for GET /analytics/rejection-rate. The developer_id in the request body must match the authenticated user's JWT sub claim.",
+        "operationId": "submitMatchFeedback",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/FeedbackRequest" },
+              "example": {
+                "developer_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                "match_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+                "accepted": false,
+                "comment": "Project timezone does not work for me"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Feedback stored",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FeedbackResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request body",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — developer_id in body does not match authenticated user",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "match_id not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "422": {
+            "description": "Validation error",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/matches/rescore": {
+      "post": {
+        "tags": ["matches"],
+        "summary": "Trigger batch match re-scoring",
+        "description": "Re-computes MATCH_SCORE for all or a subset of matches using the current WeightConfig. Enables on-demand re-optimization after weight changes. Returns HTTP 202 Accepted; processing is asynchronous. Manager role required.",
+        "operationId": "rescoreMatches",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RescoreRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Re-score job accepted and queued",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AsyncJobResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/matches/{match_id}": {
+      "get": {
+        "tags": ["matches"],
+        "summary": "Get a match record by ID",
+        "description": "Returns the full MatchRecord. If explanation_source='stub_pending', poll this endpoint or GET /matches/{match_id}/explanation to check for the completed LLM explanation. Developers may only retrieve their own match records.",
+        "operationId": "getMatch",
+        "parameters": [
+          { "$ref": "#/components/parameters/MatchIdPath" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Match record found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MatchRecord" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "Match not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/matches/{match_id}/explanation": {
+      "get": {
+        "tags": ["matches"],
+        "summary": "Poll for the LLM-generated explanation",
+        "description": "Returns the current explanation text and its source. Frontend shows a loading indicator while explanation_source='stub_pending' and polls this endpoint. Once explanation_source transitions to 'claude_async', 'claude_cached', or 'stub_permanent', polling may stop. Never exposes raw work_style or motivation_vector values.",
+        "operationId": "getMatchExplanation",
+        "parameters": [
+          { "$ref": "#/components/parameters/MatchIdPath" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Explanation returned (may still be a stub if the LLM call is pending)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ExplanationResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "Match not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/config/weights": {
+      "get": {
+        "tags": ["config"],
+        "summary": "Get current matching weight configuration",
+        "description": "Returns the active WeightConfig (w1–w5). Weights are always loaded fresh from the PostgreSQL primary on each match request — no in-process caching.",
+        "operationId": "getWeights",
+        "responses": {
+          "200": {
+            "description": "Current weight configuration",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WeightConfig" },
+                "example": {
+                  "w1": 0.30,
+                  "w2": 0.25,
+                  "w3": 0.20,
+                  "w4": 0.10,
+                  "w5": 0.15,
+                  "version": 3,
+                  "updated_at": "2026-06-26T09:00:00Z"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      },
+      "put": {
+        "tags": ["config"],
+        "summary": "Update matching weights",
+        "description": "Replaces the active WeightConfig. Validation: all wi ≥ 0.0 AND |sum(w1..w5) − 1.0| < 0.001. On success, invalidates ExplanationCache entries (weights_snapshot_hash changes). Returns HTTP 400 — preserving the previous config — on constraint violations. Manager role required.",
+        "operationId": "updateWeights",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/WeightConfigUpdate" },
+              "example": {
+                "w1": 0.35,
+                "w2": 0.25,
+                "w3": 0.20,
+                "w4": 0.10,
+                "w5": 0.10
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Weight configuration updated; ExplanationCache invalidated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WeightConfig" }
+              }
+            }
+          },
+          "400": {
+            "description": "Weights do not satisfy constraints — previous configuration preserved",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": {
+                  "error_code": "INVALID_WEIGHTS",
+                  "message": "Weights must be non-negative and sum to 1.0 (±0.001). Received: w1=0.35 w2=0.25 w3=0.20 w4=0.10 w5=0.25 sum=1.15",
+                  "request_id": "req_abc456"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "422": {
+            "description": "Validation error",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/analytics/rejection-rate": {
+      "get": {
+        "tags": ["analytics"],
+        "summary": "Get match recommendation rejection rate for a developer",
+        "description": "Returns rejection_ratio = count(accepted=false) / count(*) from FeedbackRecord. When sample_count < 10 (configurable via REJECTION_RATE_MIN_SAMPLES), returns rejection_ratio=null and min_sample_floor_met=false to prevent surfacing statistically unreliable data to managers. Raw behavioral vectors are never included.",
+        "operationId": "getRejectionRate",
+        "parameters": [
+          {
+            "name": "developer_id",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "UUID of the developer whose rejection rate to compute"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rejection rate response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RejectionRateResponse" },
+                "example": {
+                  "developer_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                  "rejection_ratio": 0.42,
+                  "sample_count": 24,
+                  "min_sample_floor_met": true,
+                  "accepted_count": 14,
+                  "rejected_count": 10
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid developer_id query parameter",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — developers may only query their own rejection rate; managers may query any",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/analytics/team-rejection-rate": {
+      "get": {
+        "tags": ["analytics"],
+        "summary": "Get aggregated rejection rate for a team",
+        "description": "Returns per-member and aggregate rejection statistics for a team. Members below the sample floor show min_sample_floor_met=false and rejection_ratio=null. Manager role required.",
+        "operationId": "getTeamRejectionRate",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Team identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Team rejection rate statistics",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TeamRejectionRateResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid team_id",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/analytics/match-stats": {
+      "get": {
+        "tags": ["analytics"],
+        "summary": "Get match statistics for a developer",
+        "description": "Returns total_matches, accepted_count, rejected_count, and rejection_ratio (null if sample_count < 10).",
+        "operationId": "getMatchStats",
+        "parameters": [
+          {
+            "name": "developer_id",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Developer identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Match statistics",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MatchStatsResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid developer_id",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/teams/{team_id}/risk-summary": {
+      "get": {
+        "tags": ["risk"],
+        "summary": "Get risk badge summary for a team",
+        "description": "Returns per-member risk badges (bench, burnout) and team-level distribution counts. Used by the Manager Dashboard. Raw behavioral vectors are never included in the response. Manager role required.",
+        "operationId": "getTeamRiskSummary",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Team identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Team risk summary",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TeamRiskSummary" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "Team not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/risk/refresh": {
+      "post": {
+        "tags": ["risk"],
+        "summary": "Batch refresh all developer risk scores",
+        "description": "Re-computes burnout_risk_score and bench_risk_score for all developers from current AllocationRecord data. Returns HTTP 202; processing is asynchronous. Manager role required.",
+        "operationId": "refreshRiskScores",
+        "responses": {
+          "202": {
+            "description": "Risk refresh job accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AsyncJobResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/admin/erasure-audit/{developer_id}": {
+      "get": {
+        "tags": ["admin"],
+        "summary": "Get GDPR erasure audit log for a developer",
+        "description": "Returns the ErasureAuditLog entry for the specified developer_id for compliance reporting. Records status 'completed' or 'failed'. Manager role required.",
+        "operationId": "getErasureAudit",
+        "parameters": [
+          { "$ref": "#/components/parameters/DeveloperIdPath" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Erasure audit record found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErasureAuditRecord" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "404": {
+            "description": "No erasure audit record found for this developer_id (erasure never requested)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/admin/reembed": {
+      "post": {
+        "tags": ["admin"],
+        "summary": "Trigger full re-embedding of all profiles",
+        "description": "Enqueues batch re-embedding for all DeveloperProfile and ProjectProfile records. Used when the embedding model changes. After completion, the HNSW index must be rebuilt offline (REINDEX CONCURRENTLY). Returns HTTP 202 Accepted. Manager role required.",
+        "operationId": "triggerReembed",
+        "responses": {
+          "202": {
+            "description": "Re-embedding job accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AsyncJobResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT access token from POST /auth/login. Algorithm: HS256. Payload: {sub: user_id, role: 'developer'|'manager', iat, exp}. TTL: 1h. Secret loaded from env NEURAL_SYNC_JWT_SECRET. Per ADR-002: store in memory (not localStorage) on the React frontend; refresh token stored in HttpOnly cookie."
+      }
+    },
+    "parameters": {
+      "DeveloperIdPath": {
+        "name": "developer_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" },
+        "description": "Developer unique identifier (UUID v4)"
+      },
+      "ProjectIdPath": {
+        "name": "project_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" },
+        "description": "Project unique identifier (UUID v4)"
+      },
+      "MatchIdPath": {
+        "name": "match_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" },
+        "description": "Match record unique identifier (UUID v4)"
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "description": "Standard error envelope returned on all 4xx and 5xx responses.",
+        "required": ["error_code", "message", "request_id"],
+        "properties": {
+          "error_code": {
+            "type": "string",
+            "description": "Machine-readable error code. Examples: NOT_FOUND, INVALID_WEIGHTS, VALIDATION_ERROR, ERASURE_FAILED, SERVICE_UNAVAILABLE, FORBIDDEN, UNAUTHORIZED, CONFLICT"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable description of the error, safe to display in developer tooling"
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Unique request trace identifier for correlating logs"
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": ["status", "version", "timestamp"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["healthy", "degraded", "unhealthy"],
+            "description": "Overall service status"
+          },
+          "version": {
+            "type": "string",
+            "description": "Application version string, e.g. '1.0.0'"
+          },
+          "db_status": {
+            "type": "string",
+            "enum": ["ok", "degraded", "unavailable"],
+            "description": "PostgreSQL connection pool status"
+          },
+          "vector_store_status": {
+            "type": "string",
+            "enum": ["ok", "degraded", "unavailable"],
+            "description": "pgvector extension availability"
+          },
+          "claude_queue_depth": {
+            "type": ["integer", "null"],
+            "description": "Current async Claude explanation queue depth. Only present when ?verbose=true."
+          },
+          "claude_queue_limit_active": {
+            "type": ["boolean", "null"],
+            "description": "Whether the Claude concurrency cap (default: 5) is currently throttling new tasks. Only present when ?verbose=true."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+          "username": { "type": "string", "minLength": 1 },
+          "password": { "type": "string", "minLength": 8 }
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "required": ["access_token", "token_type", "expires_in", "user_id", "role"],
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "description": "JWT access token. Store in memory (not localStorage). TTL=1h."
+          },
+          "token_type": {
+            "type": "string",
+            "enum": ["bearer"]
+          },
+          "expires_in": {
+            "type": "integer",
+            "description": "Access token lifetime in seconds (3600)"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Authenticated user's UUID (matches JWT sub claim)"
+          },
+          "role": {
+            "type": "string",
+            "enum": ["developer", "manager"],
+            "description": "User role embedded in JWT claims"
+          }
+        }
+      },
+      "ProjectHistoryEntry": {
+        "type": "object",
+        "description": "A past project engagement for a developer.",
+        "required": ["project_id", "role", "start_date"],
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "description": "Reference to the project (UUID or external identifier)"
+          },
+          "role": {
+            "type": "string",
+            "description": "Developer's role on the project, e.g. 'Backend Engineer', 'Tech Lead'"
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Engagement start date (ISO 8601 date)"
+          },
+          "end_date": {
+            "type": ["string", "null"],
+            "format": "date",
+            "description": "Engagement end date; null if still ongoing"
+          },
+          "workload_intensity": {
+            "type": ["number", "null"],
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Reported workload intensity for this engagement; null if not recorded"
+          }
+        }
+      },
+      "DeveloperProfileCreate": {
+        "type": "object",
+        "description": "Request body for creating or replacing a DeveloperProfile. Server generates a UUID if id is omitted.",
+        "required": [
+          "skills",
+          "experience_years",
+          "preferred_stack",
+          "work_style",
+          "motivation_vector",
+          "timezone",
+          "availability_hours",
+          "career_goals",
+          "project_history"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Optional client-provided UUID. Server generates one if omitted."
+          },
+          "skills": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Technical skill list, e.g. ['Python', 'FastAPI', 'PostgreSQL', 'Docker']"
+          },
+          "experience_years": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total years of professional software development experience"
+          },
+          "preferred_stack": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Preferred technology stack"
+          },
+          "work_style": {
+            "type": "array",
+            "items": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+            "minItems": 8,
+            "maxItems": 8,
+            "description": "8-dimensional work-style behavioral vector; each element ∈ [0.0, 1.0]. Dimensions in order: [collaboration, autonomy, structure, innovation, pace, communication, risk_tolerance, remote_preference]"
+          },
+          "motivation_vector": {
+            "type": "array",
+            "items": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+            "minItems": 8,
+            "maxItems": 8,
+            "description": "8-dimensional motivation vector; each element ∈ [0.0, 1.0]. Dimensions in order: [impact, growth, compensation, stability, creativity, recognition, autonomy, mission_alignment]"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA timezone identifier, e.g. 'America/New_York', 'Europe/Warsaw', 'Asia/Singapore'"
+          },
+          "availability_hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 168,
+            "description": "Weekly hours available for project work"
+          },
+          "career_goals": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Career goal keywords or free-text statements, e.g. ['technical leadership', 'distributed systems', 'AI/ML']"
+          },
+          "project_history": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ProjectHistoryEntry" },
+            "description": "Past project engagements (may be empty for new developers)"
+          },
+          "is_self_reported": {
+            "type": "boolean",
+            "default": true,
+            "description": "True if work_style and motivation_vector are self-reported; false if inferred from external data. Influences UI badge per requirements."
+          }
+        }
+      },
+      "DeveloperProfile": {
+        "description": "Complete developer profile including server-generated fields.",
+        "allOf": [
+          { "$ref": "#/components/schemas/DeveloperProfileCreate" },
+          {
+            "type": "object",
+            "required": ["id", "embedding_status", "created_at", "updated_at"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Unique identifier (server-generated or client-provided)"
+              },
+              "embedding_status": {
+                "type": "string",
+                "enum": ["pending", "ready", "failed"],
+                "description": "Status of vector embedding generation. 'pending'=background task queued; 'ready'=embeddings available for ANN search; 'failed'=all 3 retry attempts exhausted (matching degrades to keyword-only)"
+              },
+              "created_at": { "type": "string", "format": "date-time" },
+              "updated_at": { "type": "string", "format": "date-time" }
+            }
+          }
+        ]
+      },
+      "ProjectProfileCreate": {
+        "type": "object",
+        "description": "Request body for creating or replacing a ProjectProfile.",
+        "required": [
+          "required_skills",
+          "team_structure",
+          "workload_intensity",
+          "innovation_level",
+          "timezone_overlap_required",
+          "duration_weeks",
+          "growth_opportunities"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Optional client-provided UUID. Server generates one if omitted."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable project name"
+          },
+          "required_skills": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Required technical skills for the project"
+          },
+          "team_structure": {
+            "type": "string",
+            "description": "Description of team composition and collaboration model, e.g. 'Cross-functional agile squad of 6, async-first, weekly sync'"
+          },
+          "workload_intensity": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Workload intensity 0.0 (low-pressure) to 1.0 (very high intensity). Values ≥ 0.8 over extended periods contribute to burnout risk."
+          },
+          "innovation_level": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "0.0 = pure maintenance/support; 1.0 = cutting-edge R&D/greenfield"
+          },
+          "timezone_overlap_required": {
+            "type": "string",
+            "description": "Required timezone overlap window, e.g. 'UTC+0 to UTC+3', 'Americas (UTC-8 to UTC-5)'"
+          },
+          "duration_weeks": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Projected project duration in weeks"
+          },
+          "growth_opportunities": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Learning and career growth opportunities the project offers, e.g. ['Kubernetes', 'Team leadership', 'ML pipeline design']"
+          }
+        }
+      },
+      "ProjectProfile": {
+        "description": "Complete project profile including server-generated fields.",
+        "allOf": [
+          { "$ref": "#/components/schemas/ProjectProfileCreate" },
+          {
+            "type": "object",
+            "required": ["id", "created_at", "updated_at"],
+            "properties": {
+              "id": { "type": "string", "format": "uuid" },
+              "created_at": { "type": "string", "format": "date-time" },
+              "updated_at": { "type": "string", "format": "date-time" }
+            }
+          }
+        ]
+      },
+      "WeightConfigUpdate": {
+        "type": "object",
+        "description": "Weight map for the five matching dimensions. Constraint: all wi ≥ 0.0 AND |w1+w2+w3+w4+w5 − 1.0| < 0.001. PUT /config/weights rejects payloads violating this with HTTP 400 and preserves the previous configuration.",
+        "required": ["w1", "w2", "w3", "w4", "w5"],
+        "properties": {
+          "w1": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Skill-match dimension weight (Jaccard similarity + experience_years relevance)"
+          },
+          "w2": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Work-style dimension weight (cosine similarity of behavioral vectors)"
+          },
+          "w3": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Motivation-alignment dimension weight"
+          },
+          "w4": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Timezone-compatibility dimension weight"
+          },
+          "w5": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Growth-potential dimension weight (career_goals vs growth_opportunities alignment)"
+          }
+        }
+      },
+      "WeightConfig": {
+        "description": "Active weight configuration including server-side version and timestamp.",
+        "allOf": [
+          { "$ref": "#/components/schemas/WeightConfigUpdate" },
+          {
+            "type": "object",
+            "required": ["updated_at"],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "description": "Monotonically increasing version counter; incremented on each successful PUT"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timestamp of last successful update"
+              }
+            }
+          }
+        ]
+      },
+      "ComponentScores": {
+        "type": "object",
+        "description": "Individual dimension scores that compose the weighted MATCH_SCORE.",
+        "required": ["skill_score", "workstyle_score", "motivation_score", "timezone_score", "growth_score"],
+        "properties": {
+          "skill_score": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Jaccard similarity of skills weighted by experience_years relevance"
+          },
+          "workstyle_score": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Cosine similarity of developer.work_style vs project team_structure behavioral embedding. Defaults to 0.5 when vector search degraded."
+          },
+          "motivation_score": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Cosine similarity of developer.motivation_vector vs project innovation_level + growth_opportunities embedding. Defaults to 0.5 when vector search degraded."
+          },
+          "timezone_score": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Overlap score from timezone distance matrix"
+          },
+          "growth_score": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Keyword overlap + ANN embedding similarity of career_goals vs growth_opportunities"
+          }
+        }
+      },
+      "MatchRequest": {
+        "type": "object",
+        "description": "Request body for POST /matches. Accepts inline DeveloperProfile and ProjectProfile objects. If id fields are provided and the profiles already exist in the DB, the server uses the stored records; otherwise a transient match is computed from the inline data and the profiles are persisted.",
+        "required": ["developer_profile", "project_profile"],
+        "properties": {
+          "developer_profile": {
+            "$ref": "#/components/schemas/DeveloperProfileCreate",
+            "description": "Full DeveloperProfile object as specified by requirements Acceptance Criterion 1"
+          },
+          "project_profile": {
+            "$ref": "#/components/schemas/ProjectProfileCreate",
+            "description": "Full ProjectProfile object"
+          }
+        }
+      },
+      "MatchResponse": {
+        "type": "object",
+        "description": "Response from POST /matches. Always returned within 500ms p95 SLA per ADR-003. The explanation field is always non-empty (≥50 chars): either a cached Claude explanation (explanation_source='claude_cached') or a deterministic algorithmic stub (explanation_source='stub_pending'). The stub covers skill alignment, behavioral fit, and growth potential to satisfy AC3.",
+        "required": [
+          "match_id",
+          "developer_id",
+          "project_id",
+          "match_score",
+          "explanation",
+          "explanation_source",
+          "risks",
+          "growth_potential",
+          "component_scores",
+          "weights_snapshot",
+          "vector_search_degraded",
+          "behavioral_data_unavailable",
+          "created_at"
+        ],
+        "properties": {
+          "match_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique identifier for this MatchRecord"
+          },
+          "developer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "match_score": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Weighted composite match score: w1·skill_score + w2·workstyle_score + w3·motivation_score + w4·timezone_score + w5·growth_score"
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 50,
+            "description": "Match explanation. Always non-empty and ≥50 chars. Stub format: 'Skill alignment: [sentence]. Behavioral fit: [sentence]. Growth potential: [sentence].' Upgraded to full LLM explanation asynchronously."
+          },
+          "explanation_source": {
+            "type": "string",
+            "enum": ["stub_pending", "claude_cached", "claude_async", "stub_permanent"],
+            "description": "stub_pending=LLM call enqueued; claude_cached=served from ExplanationCache; claude_async=LLM response written after initial stub; stub_permanent=all 3 LLM retry attempts exhausted (enum literal values retained as code symbols regardless of provider)"
+          },
+          "risks": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Identified compatibility risks. May be empty. E.g. 'Timezone mismatch limits synchronous collaboration windows.'"
+          },
+          "growth_potential": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Growth opportunities aligned with developer career_goals. May be empty."
+          },
+          "component_scores": {
+            "$ref": "#/components/schemas/ComponentScores"
+          },
+          "weights_snapshot": {
+            "$ref": "#/components/schemas/WeightConfigUpdate",
+            "description": "Weight values used for this match computation (snapshot at request time)"
+          },
+          "vector_search_degraded": {
+            "type": "boolean",
+            "default": false,
+            "description": "True if pgvector ANN search timed out (>150ms); workstyle_score and motivation_score defaulted to 0.5 (keyword fallback used)"
+          },
+          "behavioral_data_unavailable": {
+            "type": "boolean",
+            "default": false,
+            "description": "True if developer embedding_status ≠ 'ready'; all vector-based dimension scores defaulted to 0.5"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MatchRecord": {
+        "description": "Full MatchRecord as returned by GET /matches/{match_id}. Extends MatchResponse with the explanation update timestamp.",
+        "allOf": [
+          { "$ref": "#/components/schemas/MatchResponse" },
+          {
+            "type": "object",
+            "properties": {
+              "explanation_updated_at": {
+                "type": ["string", "null"],
+                "format": "date-time",
+                "description": "Timestamp when the LLM explanation was written to this record. null if still a stub."
+              }
+            }
+          }
+        ]
+      },
+      "ExplanationResponse": {
+        "type": "object",
+        "description": "Explanation polling response from GET /matches/{match_id}/explanation.",
+        "required": ["match_id", "explanation", "explanation_source"],
+        "properties": {
+          "match_id": { "type": "string", "format": "uuid" },
+          "explanation": {
+            "type": "string",
+            "minLength": 50,
+            "description": "Current explanation text. Stub or full LLM explanation depending on explanation_source."
+          },
+          "explanation_source": {
+            "type": "string",
+            "enum": ["stub_pending", "claude_cached", "claude_async", "stub_permanent"]
+          },
+          "explanation_updated_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "When the LLM explanation was last written; null if still a stub"
+          }
+        }
+      },
+      "RiskResponse": {
+        "type": "object",
+        "description": "Developer burnout and bench risk scores. Raw behavioral vectors are never included.",
+        "required": ["developer_id", "burnout_risk_score", "bench_risk_score", "burnout_risk_badge", "bench_risk_badge", "computed_at"],
+        "properties": {
+          "developer_id": { "type": "string", "format": "uuid" },
+          "burnout_risk_score": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Burnout risk 0.0–1.0. Formula: min(1.0, (consecutive_high_intensity_weeks / 48) × workload_intensity_mean × (1 − motivation_alignment_factor)). Score > 0.6 triggers 'high' badge."
+          },
+          "bench_risk_score": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Bench risk 0.0–1.0. Formula: min(1.0, max(0.0, (28 − days_until_project_end) / 28)). Score > 0.7 triggers 'high' badge."
+          },
+          "burnout_risk_badge": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+            "description": "low: score < 0.4; medium: 0.4 ≤ score ≤ 0.6; high: score > 0.6"
+          },
+          "bench_risk_badge": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+            "description": "low: score < 0.4; medium: 0.4 ≤ score ≤ 0.7; high: score > 0.7"
+          },
+          "computed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of score computation"
+          }
+        }
+      },
+      "TeamRiskMember": {
+        "type": "object",
+        "required": ["developer_id", "burnout_risk_badge", "bench_risk_badge", "burnout_risk_score", "bench_risk_score"],
+        "properties": {
+          "developer_id": { "type": "string", "format": "uuid" },
+          "burnout_risk_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+          "bench_risk_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+          "burnout_risk_badge": { "type": "string", "enum": ["low", "medium", "high"] },
+          "bench_risk_badge": { "type": "string", "enum": ["low", "medium", "high"] }
+        }
+      },
+      "TeamRiskDistribution": {
+        "type": "object",
+        "properties": {
+          "burnout_high_count": { "type": "integer", "minimum": 0 },
+          "burnout_medium_count": { "type": "integer", "minimum": 0 },
+          "burnout_low_count": { "type": "integer", "minimum": 0 },
+          "bench_high_count": { "type": "integer", "minimum": 0 },
+          "bench_medium_count": { "type": "integer", "minimum": 0 },
+          "bench_low_count": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "TeamRiskSummary": {
+        "type": "object",
+        "description": "Aggregated risk view for Manager Dashboard. Raw behavioral vectors never included per requirements non-goal.",
+        "required": ["team_id", "member_count", "members", "risk_distribution", "computed_at"],
+        "properties": {
+          "team_id": { "type": "string", "format": "uuid" },
+          "member_count": { "type": "integer", "minimum": 0 },
+          "members": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/TeamRiskMember" }
+          },
+          "risk_distribution": { "$ref": "#/components/schemas/TeamRiskDistribution" },
+          "computed_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "FeedbackRequest": {
+        "type": "object",
+        "description": "Request body for POST /matches/feedback.",
+        "required": ["developer_id", "match_id", "accepted"],
+        "properties": {
+          "developer_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Developer submitting feedback. Must match the authenticated JWT sub claim."
+          },
+          "match_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID of the match recommendation being responded to"
+          },
+          "accepted": {
+            "type": "boolean",
+            "description": "true = developer accepts the recommendation; false = developer rejects it. Rejections accumulate in rejection_ratio analytics."
+          },
+          "comment": {
+            "type": ["string", "null"],
+            "maxLength": 500,
+            "description": "Optional rejection reason or note (free-text)"
+          }
+        }
+      },
+      "FeedbackResponse": {
+        "type": "object",
+        "required": ["id", "developer_id", "match_id", "accepted", "feedback_timestamp"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid", "description": "FeedbackRecord UUID" },
+          "developer_id": { "type": "string", "format": "uuid" },
+          "match_id": { "type": "string", "format": "uuid" },
+          "accepted": { "type": "boolean" },
+          "comment": { "type": ["string", "null"] },
+          "feedback_timestamp": { "type": "string", "format": "date-time" }
+        }
+      },
+      "RejectionRateResponse": {
+        "type": "object",
+        "description": "Rejection rate for a developer. rejection_ratio is null when sample_count < REJECTION_RATE_MIN_SAMPLES (default 10) to prevent unreliable statistics from reaching the Manager Dashboard.",
+        "required": ["developer_id", "sample_count", "min_sample_floor_met", "accepted_count", "rejected_count"],
+        "properties": {
+          "developer_id": { "type": "string", "format": "uuid" },
+          "rejection_ratio": {
+            "type": ["number", "null"],
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "count(accepted=false) / count(*). null if min_sample_floor_met=false."
+          },
+          "sample_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total FeedbackRecord count for this developer"
+          },
+          "min_sample_floor_met": {
+            "type": "boolean",
+            "description": "True when sample_count ≥ REJECTION_RATE_MIN_SAMPLES (default 10). False causes Manager Dashboard to show 'Insufficient data' badge."
+          },
+          "accepted_count": { "type": "integer", "minimum": 0 },
+          "rejected_count": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "TeamMemberRejectionRate": {
+        "type": "object",
+        "required": ["developer_id", "sample_count", "min_sample_floor_met"],
+        "properties": {
+          "developer_id": { "type": "string", "format": "uuid" },
+          "rejection_ratio": { "type": ["number", "null"], "minimum": 0.0, "maximum": 1.0 },
+          "sample_count": { "type": "integer", "minimum": 0 },
+          "min_sample_floor_met": { "type": "boolean" }
+        }
+      },
+      "TeamRejectionRateResponse": {
+        "type": "object",
+        "required": ["team_id", "members"],
+        "properties": {
+          "team_id": { "type": "string", "format": "uuid" },
+          "members": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/TeamMemberRejectionRate" }
+          },
+          "team_average_rejection_ratio": {
+            "type": ["number", "null"],
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Average rejection ratio across members who have met the sample floor. null if no member has met the floor."
+          }
+        }
+      },
+      "MatchStatsResponse": {
+        "type": "object",
+        "required": ["developer_id", "total_matches", "accepted_count", "rejected_count", "min_sample_floor_met"],
+        "properties": {
+          "developer_id": { "type": "string", "format": "uuid" },
+          "total_matches": { "type": "integer", "minimum": 0 },
+          "accepted_count": { "type": "integer", "minimum": 0 },
+          "rejected_count": { "type": "integer", "minimum": 0 },
+          "rejection_ratio": {
+            "type": ["number", "null"],
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "null if sample_count < 10"
+          },
+          "min_sample_floor_met": { "type": "boolean" }
+        }
+      },
+      "DeveloperMatchesResponse": {
+        "type": "object",
+        "required": ["developer_id", "matches", "total"],
+        "properties": {
+          "developer_id": { "type": "string", "format": "uuid" },
+          "matches": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/MatchRecord" },
+            "description": "Ranked match records, highest match_score first"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total number of match records for this developer (before top_k filtering)"
+          }
+        }
+      },
+      "ErasureAuditRecord": {
+        "type": "object",
+        "description": "ErasureAuditLog entry created on each DELETE /developers/{developer_id} request.",
+        "required": ["erasure_request_id", "developer_id", "requested_at", "status", "initiating_user_id"],
+        "properties": {
+          "erasure_request_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique identifier for this erasure request"
+          },
+          "developer_id": { "type": "string", "format": "uuid" },
+          "requested_at": { "type": "string", "format": "date-time" },
+          "completed_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "Timestamp of successful cascade deletion; null if status=failed"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["completed", "failed"],
+            "description": "completed=all 6 cascade operations succeeded and committed; failed=transaction rolled back, developer data intact"
+          },
+          "initiating_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "JWT sub of the user who initiated the erasure"
+          }
+        }
+      },
+      "RescoreRequest": {
+        "type": "object",
+        "description": "Optional body for POST /matches/rescore. Omit entirely to re-score all developers.",
+        "properties": {
+          "developer_ids": {
+            "type": ["array", "null"],
+            "items": { "type": "string", "format": "uuid" },
+            "description": "Scope re-scoring to these developer IDs. null or omitted = re-score all developers."
+          }
+        }
+      },
+      "AsyncJobResponse": {
+        "type": "object",
+        "description": "Generic HTTP 202 response for asynchronous background jobs.",
+        "required": ["job_id", "message"],
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique identifier for the queued background job"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable status message"
+          },
+          "estimated_count": {
+            "type": ["integer", "null"],
+            "description": "Estimated number of records to be processed (informational)"
+          }
+        }
+      }
+    }
+  }
+}

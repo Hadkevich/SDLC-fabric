@@ -1,0 +1,97 @@
+{
+    "spec_version": "v1",
+    "workflow_id": "wf-habit-tracker-001",
+    "test_suites": [
+        {
+            "suite_id": "TS-001",
+            "name": "Habit CRUD",
+            "owner_agent": "qa-agent",
+            "test_cases": [
+                {
+                    "test_id": "TC-001",
+                    "name": "Create a habit",
+                    "given": "The API is running",
+                    "when": "POST /habits with { name: 'Exercise', frequency: 'daily' }",
+                    "then": "Response is 201 with id, name, frequency, and created_at fields",
+                    "status": "pass",
+                    "maps_to_requirement": "Create, read, update, delete habits"
+                },
+                {
+                    "test_id": "TC-002",
+                    "name": "List all habits",
+                    "given": "Two habits exist",
+                    "when": "GET /habits",
+                    "then": "Response is 200 with array of 2 habits",
+                    "status": "pass",
+                    "maps_to_requirement": "Create, read, update, delete habits"
+                },
+                {
+                    "test_id": "TC-003",
+                    "name": "Update a habit name",
+                    "given": "A habit with id=1 exists",
+                    "when": "PUT /habits/1 with { name: 'Run 5km' }",
+                    "then": "Response is 200 with updated name",
+                    "status": "pass",
+                    "maps_to_requirement": "Create, read, update, delete habits"
+                },
+                {
+                    "test_id": "TC-004",
+                    "name": "Delete a habit",
+                    "given": "A habit with id=1 exists",
+                    "when": "DELETE /habits/1",
+                    "then": "Response is 204; subsequent GET /habits/1 returns 404",
+                    "status": "pass",
+                    "maps_to_requirement": "Create, read, update, delete habits"
+                }
+            ]
+        },
+        {
+            "suite_id": "TS-002",
+            "name": "Habit Completion",
+            "owner_agent": "qa-agent",
+            "test_cases": [
+                {
+                    "test_id": "TC-005",
+                    "name": "Mark a habit complete for today",
+                    "given": "A habit with id=1 exists",
+                    "when": "POST /habits/1/completions with { date: '2026-06-24' }",
+                    "then": "Response is 201 with habit_id, date, and completed_at",
+                    "status": "pass",
+                    "maps_to_requirement": "Mark a habit complete for a given day"
+                },
+                {
+                    "test_id": "TC-006",
+                    "name": "Duplicate completion is rejected",
+                    "given": "Habit 1 already completed on 2026-06-24",
+                    "when": "POST /habits/1/completions with { date: '2026-06-24' }",
+                    "then": "Response is 409 Conflict",
+                    "status": "pass",
+                    "maps_to_requirement": "Mark a habit complete for a given day"
+                }
+            ]
+        },
+        {
+            "suite_id": "TS-003",
+            "name": "Validation",
+            "owner_agent": "qa-agent",
+            "test_cases": [
+                {
+                    "test_id": "TC-007",
+                    "name": "Missing required field returns 422",
+                    "given": "The API is running",
+                    "when": "POST /habits with empty body {}",
+                    "then": "Response is 422 with field-level error for 'name'",
+                    "status": "pass",
+                    "maps_to_requirement": "All endpoints have tests"
+                }
+            ]
+        }
+    ],
+    "summary": {
+        "total": 7,
+        "passed": 7,
+        "failed": 0,
+        "skipped": 0,
+        "coverage_note": "All 4 acceptance criteria from requirements.json are covered"
+    }
+}

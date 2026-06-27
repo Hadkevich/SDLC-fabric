@@ -1,0 +1,41 @@
+    {
+        "spec_version": "v1",
+        "id": "req-001",
+        "title": "Build a local habit tracker API",
+        "problem_statement": "Users need a small REST API to track habits and completion status locally.",
+        "scope": {
+            "in_scope": [
+                "CRUD habits",
+                "mark habit completion",
+                "local persistence",
+                "basic validation"
+            ],
+            "out_of_scope": [
+                "authentication",
+                "multi-user support",
+                "cloud deployment"
+            ]
+        },
+        "non_goals": [
+            "mobile app",
+            "analytics dashboard"
+        ],
+        "constraints": [
+            "must run locally",
+            "must include tests",
+            "must be deployable with one command"
+        ],
+        "acceptance_criteria": [
+            "Create, read, update, delete habits",
+            "Mark a habit complete for a given day",
+            "All endpoints have tests",
+            "Application starts successfully with documented command"
+        ],
+        "risks": [
+            "scope creep",
+            "state persistence bugs"
+        ],
+        "open_questions": [
+            "Should persistence use JSON file or SQLite?"
+        ]
+    }

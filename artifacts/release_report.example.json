@@ -1,0 +1,27 @@
+{
+    "spec_version": "v1",
+    "workflow_id": "wf-habit-tracker-001",
+    "environment": "local",
+    "artifact_ref": "src/",
+    "deploy_command": "uvicorn main:app --host 0.0.0.0 --port 8000",
+    "health_checks": [
+        {
+            "name": "HTTP liveness",
+            "endpoint": "GET http://localhost:8000/healthz",
+            "expected": "200 OK",
+            "actual": "200 OK",
+            "status": "pass"
+        },
+        {
+            "name": "Habits list responds",
+            "endpoint": "GET http://localhost:8000/habits",
+            "expected": "200 with JSON array",
+            "actual": "200 []",
+            "status": "pass"
+        }
+    ],
+    "rollback_available": false,
+    "verdict": "success",
+    "notes": "Local deployment only. Single-command start documented in README.",
+    "deployed_at": "2026-06-24T10:00:00Z"
+}

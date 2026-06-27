@@ -1,0 +1,496 @@
+<!--
+  Agentic SDLC — live observability dashboard.
+  Zero dependencies. Reads a project's events.log.jsonl + workflow_state.json
+  and auto-refreshes. Serve from the REPO ROOT:
+      python3 -m http.server 8777
+  then open:  http://localhost:8777/observability/dashboard.html?project=tic-tac-toe
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic SDLC — Live Dashboard</title>
+<style>
+  :root {
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232d; --border:#2b333d;
+    --text:#e6edf3; --muted:#8b949e;
+    --pending:#3a3f47; --running:#d2a106; --success:#2ea043; --failure:#da3633;
+    --blocked:#bb8009; --skipped:#57606a; --accent:#388bfd;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.5 ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial; }
+  header { display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+           padding:14px 20px; border-bottom:1px solid var(--border); background:var(--panel); }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  .meta { color:var(--muted); font-size:12px; }
+  .meta b { color:var(--text); font-weight:600; }
+  .live { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); margin-left:auto; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--success); animation:pulse 1.4s infinite; }
+  .dot.stale { background:var(--failure); animation:none; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+  select, input { background:var(--panel2); color:var(--text); border:1px solid var(--border);
+                  border-radius:6px; padding:5px 8px; font:inherit; }
+  main { display:grid; grid-template-columns:1fr; gap:16px; padding:20px; max-width:1200px; margin:0 auto; }
+
+  /* pipeline graph */
+  .pipeline { display:flex; flex-wrap:wrap; align-items:stretch; gap:0; overflow-x:auto; padding-bottom:4px; }
+  .node { min-width:130px; flex:1; background:var(--panel); border:1px solid var(--border);
+          border-top:3px solid var(--pending); border-radius:8px; padding:10px 12px; cursor:pointer;
+          transition:transform .08s, box-shadow .08s; }
+  .node:hover { transform:translateY(-2px); box-shadow:0 4px 14px rgba(0,0,0,.4); }
+  .node.sel { outline:2px solid var(--accent); }
+  .node .stage { font-size:11px; color:var(--muted); text-transform:capitalize; }
+  .node .agent { font-weight:600; margin-top:2px; font-size:13px; }
+  .node .badge { display:inline-block; margin-top:8px; font-size:11px; padding:2px 8px; border-radius:99px;
+                 background:var(--panel2); color:var(--muted); }
+  .node.s-success { border-top-color:var(--success); }
+  .node.s-in_progress { border-top-color:var(--running); }
+  .node.s-failure { border-top-color:var(--failure); }
+  .node.s-blocked  { border-top-color:var(--blocked); }
+  .node.s-skipped  { border-top-color:var(--skipped); opacity:.7; }
+  .node.s-awaiting_approval { border-top-color:var(--accent); }
+  .node.s-halted   { border-top-color:var(--failure); opacity:.85; }
+  .node.s-success .badge  { background:rgba(46,160,67,.15); color:#56d364; }
+  .node.s-in_progress .badge { background:rgba(210,161,6,.18); color:#e3b341; }
+  .node.s-failure .badge  { background:rgba(218,54,51,.18); color:#ff7b72; }
+  .node.s-blocked .badge  { background:rgba(187,128,9,.18); color:#e3b341; }
+  .node.s-awaiting_approval .badge { background:rgba(56,139,253,.18); color:#79c0ff; }
+  .node.s-halted .badge  { background:rgba(218,54,51,.18); color:#ff7b72; }
+  .arrow { display:flex; align-items:center; color:var(--muted); padding:0 4px; font-size:18px; }
+
+  /* run-metrics tiles */
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; padding:14px; }
+  .tile { background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding:12px 14px; }
+  .tile .label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; }
+  .tile .val { font-size:22px; font-weight:600; margin-top:4px; font-variant-numeric:tabular-nums; }
+  .tile .sub2 { font-size:11.5px; color:var(--muted); margin-top:3px; }
+  .tile.accent .val { color:var(--accent); }
+  .metricline { font-size:12.5px; color:var(--muted); margin-top:4px; font-variant-numeric:tabular-nums; }
+  .rblabel { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; padding:0 14px 6px; }
+  .rchips { display:flex; flex-wrap:wrap; gap:8px; padding:0 14px 14px; }
+  .rchip { background:var(--panel2); border:1px solid var(--border); border-radius:99px;
+           padding:3px 10px; font-size:12.5px; color:var(--muted); }
+  .rchip b { color:var(--text); }
+  .rchip.retry b { color:#e3b341; }
+  .rchip.time b { color:#79c0ff; }
+  .rblabel + .rblabel { margin-top:2px; }
+
+  /* live agent activity feed */
+  .feed { max-height:320px; overflow:auto; }
+  .activehead { padding:10px 14px; border-bottom:1px solid var(--border); color:var(--muted); font-size:12.5px; }
+  .step { display:grid; grid-template-columns:60px 24px 1fr; gap:8px; align-items:start;
+          padding:6px 14px; border-bottom:1px solid var(--border); font-size:13px; }
+  .step:last-child { border-bottom:0; }
+  .step .t { color:var(--muted); font-size:11.5px; font-variant-numeric:tabular-nums; }
+  .step .ic { font-size:14px; text-align:center; }
+  .step .tool { font-family:ui-monospace,Menlo,Consolas,monospace; font-weight:600; }
+  .step .det { color:var(--muted); font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; }
+  .step.text .msg { color:var(--text); }
+
+  .grid2 { display:grid; grid-template-columns:1.1fr .9fr; gap:16px; }
+  @media (max-width:860px){ .grid2{ grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+  .card h2 { margin:0; padding:11px 14px; font-size:13px; border-bottom:1px solid var(--border);
+             color:var(--muted); font-weight:600; letter-spacing:.3px; text-transform:uppercase; }
+  .card .body { padding:6px 0; max-height:460px; overflow:auto; }
+
+  /* timeline */
+  .ev { display:grid; grid-template-columns:64px 1fr auto; gap:10px; align-items:start;
+        padding:9px 14px; border-bottom:1px solid var(--border); cursor:pointer; }
+  .ev:last-child { border-bottom:0; }
+  .ev:hover { background:var(--panel2); }
+  .ev.sel { background:rgba(56,139,253,.10); }
+  .ev .t { color:var(--muted); font-variant-numeric:tabular-nums; font-size:12px; }
+  .ev .who { font-weight:600; }
+  .ev .sum { color:var(--muted); font-size:12px; margin-top:2px; }
+  .pill { font-size:11px; padding:2px 8px; border-radius:99px; white-space:nowrap; }
+  .pill.success{ background:rgba(46,160,67,.15); color:#56d364; }
+  .pill.failure{ background:rgba(218,54,51,.18); color:#ff7b72; }
+  .pill.retry{ background:rgba(210,161,6,.18); color:#e3b341; }
+  .pill.blocked{ background:rgba(187,128,9,.18); color:#e3b341; }
+
+  /* detail */
+  .detail .body { padding:14px; }
+  .detail h3 { margin:0 0 2px; font-size:15px; }
+  .detail .sub { color:var(--muted); font-size:12px; margin-bottom:14px; }
+  .kv { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; margin:14px 0 6px; }
+  .files li { list-style:none; }
+  .files a { color:var(--accent); text-decoration:none; font-family:ui-monospace,Menlo,Consolas,monospace;
+             font-size:12.5px; display:inline-block; padding:3px 0; }
+  .files a:hover { text-decoration:underline; }
+  .files a::before { content:"📄 "; }
+  .files .in a::before { content:"📥 "; }
+  .summary { background:var(--panel2); border-radius:6px; padding:10px 12px; font-size:13px; }
+  .issues li { color:#ff7b72; font-size:13px; }
+  .empty { color:var(--muted); padding:24px 14px; text-align:center; font-size:13px; }
+  .errbar { background:rgba(218,54,51,.12); border:1px solid var(--failure); color:#ff9b95;
+            border-radius:8px; padding:10px 14px; font-size:13px; }
+  code { background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛰️ Agentic SDLC</h1>
+  <label class="meta">project
+    <select id="project"></select>
+  </label>
+  <span class="meta">workflow <b id="wfid">—</b></span>
+  <span class="meta">stage <b id="stage">—</b></span>
+  <span class="meta">overall <b id="overall">—</b></span>
+  <span class="live"><span class="dot" id="dot"></span><span id="livetxt">connecting…</span></span>
+</header>
+
+<main>
+  <div id="err"></div>
+  <section class="card">
+    <h2>Agent pipeline</h2>
+    <div class="body" style="padding:14px;"><div class="pipeline" id="pipeline"></div></div>
+  </section>
+
+  <section class="card">
+    <h2>Run metrics</h2>
+    <div class="stats" id="stats"></div>
+    <div id="retrybreak"></div>
+  </section>
+
+  <section class="card">
+    <h2>Live agent activity <span id="activetask" class="meta"></span></h2>
+    <div class="body" id="activity" style="padding:0;"><div class="empty">No agent activity yet.</div></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Event timeline <span id="evcount" class="meta"></span></h2>
+      <div class="body" id="timeline"></div>
+    </section>
+    <section class="card detail">
+      <h2>Under the agent</h2>
+      <div class="body" id="detail"><div class="empty">Click an agent or a timeline row to see what it did and which files it produced.</div></div>
+    </section>
+  </div>
+</main>
+
+<script>
+// ---- config -------------------------------------------------------------
+// Canonical stage order + the agent that owns each stage (fallback labels;
+// actual agent names are taken from live data when present).
+const STAGES = [
+  ["requirement_ingestion",  "product-agent"],
+  ["task_decomposition",     "planner-agent"],
+  ["planning_architecture",  "architect-agent"],
+  ["code_generation",        "developer-agent"],
+  ["code_review",            "reviewer-agent"],
+  ["testing_validation",     "qa-agent"],
+  ["deployment",             "devops-agent"],
+  ["monitoring_feedback",    "orchestrator-agent"],
+];
+// Fallback list only; the dropdown is normally auto-discovered from projects/
+// (OBS-1). Kept so the page still works if the directory index is disabled.
+const KNOWN_PROJECTS = ["tic-tac-toe", "smart-expense-tracker"];
+const POLL_MS = 1500;
+
+// Auto-discover projects by parsing the server's directory index of ../projects/.
+// Zero-dependency: works with `python3 -m http.server` (serve.sh) out of the box.
+async function discoverProjects(){
+  try{
+    const r = await fetch("../projects/?_=" + Date.now(), {cache:"no-store"});
+    if(!r.ok) return [];
+    const doc = new DOMParser().parseFromString(await r.text(), "text/html");
+    return [...doc.querySelectorAll("a")]
+      .map(a => a.getAttribute("href") || "")
+      .filter(h => h.endsWith("/") && !h.startsWith("/") && !h.startsWith("?") && h !== "../")
+      .map(h => decodeURIComponent(h.replace(/\/$/, "")));
+  }catch(e){ return []; }
+}
+
+// ---- helpers ------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const qp = new URLSearchParams(location.search);
+function projectName(){ return $("project").value || qp.get("project") || KNOWN_PROJECTS[0]; }
+function base(){ return `../projects/${projectName()}/artifacts`; }
+function esc(s){ return String(s??"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function projHref(ref){ return `../projects/${projectName()}/${ref.replace(/^projects\/[^/]+\//,"")}`; }
+function hhmm(ts){ const m=/T(\d{2}:\d{2})/.exec(ts||""); return m?m[1]:"--:--"; }
+
+// ---- metric formatting --------------------------------------------------
+function fmtTokens(n){
+  if(n==null) return "—";
+  if(n>=1e6) return (n/1e6).toFixed(2)+"M";
+  if(n>=1e3) return (n/1e3).toFixed(1)+"k";
+  return String(n);
+}
+function fmtCost(n){ return n==null ? "—" : "$"+(n<0.01 ? n.toFixed(4) : n.toFixed(2)); }
+function fmtDur(ms){
+  if(ms==null) return "—";
+  const s = ms/1000;
+  if(s<60) return s.toFixed(s<10?1:0)+"s";
+  const m=Math.floor(s/60), r=Math.round(s%60);
+  if(m<60) return `${m}m ${r}s`;
+  const h=Math.floor(m/60); return `${h}h ${m%60}m`;
+}
+function aggregate(events, state){
+  let inTok=0, outTok=0, cost=0, agentMs=0, runs=0, haveTok=false, haveCost=false, haveDur=false;
+  events.forEach(e=>{
+    const m=e.metrics;
+    if(m){
+      if(m.input_tokens!=null){ inTok+=m.input_tokens; haveTok=true; }
+      if(m.output_tokens!=null){ outTok+=m.output_tokens; haveTok=true; }
+      if(m.cost_usd!=null){ cost+=m.cost_usd; haveCost=true; }
+      if(m.duration_ms!=null){ agentMs+=m.duration_ms; haveDur=true; }
+    }
+    if(["success","failure","blocked"].includes(e.status)) runs++;
+  });
+  // retries per agent — task.attempt is the retry count; group by owner_agent
+  const retriesByAgent={}; let totalRetries=0;
+  Object.values(state?.tasks||{}).forEach(t=>{
+    const a=t.attempt||0;
+    if(a>0){ const ag=t.owner_agent||"?"; retriesByAgent[ag]=(retriesByAgent[ag]||0)+a; totalRetries+=a; }
+  });
+  // time per agent — sum each agent's reported duration across its events
+  const timeByAgent={};
+  events.forEach(e=>{
+    if(e.metrics?.duration_ms!=null){ const ag=e.agent||"?"; timeByAgent[ag]=(timeByAgent[ag]||0)+e.metrics.duration_ms; }
+  });
+  return {inTok,outTok,cost,agentMs,runs,haveTok,haveCost,haveDur,retriesByAgent,totalRetries,timeByAgent};
+}
+
+async function getJSON(path){
+  const r = await fetch(path + "?_=" + Date.now(), {cache:"no-store"});
+  if(!r.ok) throw new Error(path+" → "+r.status);
+  return r.json();
+}
+async function getJSONL(path){
+  const r = await fetch(path + "?_=" + Date.now(), {cache:"no-store"});
+  if(!r.ok) throw new Error(path+" → "+r.status);
+  const txt = await r.text();
+  return txt.split(/\r?\n/).filter(l=>l.trim()).map(l=>{ try{return JSON.parse(l);}catch{return null;} }).filter(Boolean);
+}
+
+// ---- state --------------------------------------------------------------
+let sel = null;          // {kind:'event'|'stage', key}
+let lastEvents = [];
+let lastState = null;
+
+// ---- render: pipeline ---------------------------------------------------
+function statusOf(stageKey, state){
+  if(!state) return "pending";
+  const s = state.stages?.[stageKey];
+  if(s?.status) return s.status;
+  if(state.current_stage === stageKey) return "in_progress";
+  return "pending";
+}
+function renderPipeline(state, eventsByStage){
+  const wrap = $("pipeline"); wrap.innerHTML = "";
+  STAGES.forEach(([key, defAgent], i)=>{
+    const st = statusOf(key, state);
+    const agent = state?.stages?.[key]?.agent || eventsByStage[key]?.agent || defAgent;
+    const node = document.createElement("div");
+    node.className = `node s-${st}` + (sel?.kind==="stage"&&sel.key===key ? " sel":"");
+    node.innerHTML = `<div class="stage">${esc(key.replace(/_/g," "))}</div>
+                      <div class="agent">${esc(agent)}</div>
+                      <span class="badge">${esc(st.replace(/_/g," "))}</span>`;
+    node.onclick = ()=>{ sel={kind:"stage",key}; renderAll(); };
+    wrap.appendChild(node);
+    if(i<STAGES.length-1){ const a=document.createElement("div"); a.className="arrow"; a.textContent="›"; wrap.appendChild(a); }
+  });
+}
+
+// ---- render: timeline ---------------------------------------------------
+function renderTimeline(events){
+  const tl = $("timeline");
+  $("evcount").textContent = events.length ? `(${events.length})` : "";
+  if(!events.length){ tl.innerHTML = `<div class="empty">No events yet — waiting for the first agent to run.</div>`; return; }
+  tl.innerHTML = "";
+  events.forEach((e, idx)=>{
+    const cls = e.status==="success"?"success":e.status==="failure"?"failure":e.status==="retry"?"retry":"blocked";
+    const row = document.createElement("div");
+    row.className = "ev" + (sel?.kind==="event"&&sel.key===idx ? " sel":"");
+    row.innerHTML = `<div class="t">${esc(hhmm(e.timestamp))}</div>
+      <div><div class="who">${esc(e.agent||"?")} <span class="meta">· ${esc((e.stage||"").replace(/_/g," "))}</span></div>
+           <div class="sum">${esc(e.summary||"")}</div></div>
+      <div class="pill ${cls}">${esc(e.status||"")}</div>`;
+    row.onclick = ()=>{ sel={kind:"event",key:idx}; renderAll(); };
+    tl.appendChild(row);
+  });
+}
+
+// ---- render: detail (what happened under the agent) --------------------
+function fileList(refs, kind){
+  if(!refs || !refs.length) return `<div class="meta">none</div>`;
+  return `<ul class="files ${kind}">` + refs.map(r=>
+    `<li><a href="${esc(projHref(r))}" target="_blank">${esc(r)}</a></li>`).join("") + `</ul>`;
+}
+function renderDetail(events, state){
+  const d = $("detail");
+  let ev=null, stageKey=null, sObj=null;
+  if(sel?.kind==="event"){ ev=events[sel.key]; stageKey=ev?.stage; }
+  else if(sel?.kind==="stage"){ stageKey=sel.key;
+    // latest event for that stage
+    for(let i=events.length-1;i>=0;i--){ if(events[i].stage===stageKey){ ev=events[i]; break; } } }
+  if(stageKey) sObj = state?.stages?.[stageKey];
+
+  if(!ev && !sObj){ d.innerHTML = `<div class="empty">No activity recorded for this stage yet.</div>`; return; }
+  const agent = ev?.agent || sObj?.agent || "—";
+  const status = ev?.status || sObj?.status || "pending";
+  const attempt = sObj?.attempt ?? ev?.retry_count;
+  const span = (sObj?.started_at && sObj?.completed_at) ? `${hhmm(sObj.started_at)} → ${hhmm(sObj.completed_at)}` : (ev?hhmm(ev.timestamp):"");
+  const out = ev?.output_refs || sObj?.artifact_refs || [];
+  const inp = ev?.input_refs || [];
+  const issues = ev?.blocking_issues || sObj?.blocking_issues || [];
+
+  d.innerHTML = `
+    <h3>${esc(agent)}</h3>
+    <div class="sub">${esc((stageKey||"").replace(/_/g," "))} · <span class="pill ${status==='success'?'success':status==='failure'?'failure':'blocked'}">${esc(status)}</span>
+      ${attempt!=null?` · attempt ${esc(attempt)}`:""} ${span?` · ${esc(span)}`:""}</div>
+
+    <div class="kv">Produced (${out.length})</div>${fileList(out,"out")}
+    <div class="kv">Consumed (${inp.length})</div>${fileList(inp,"in")}
+    <div class="kv">Summary</div>
+    <div class="summary">${esc(ev?.summary || "—")}</div>
+    ${ev?.metrics?`<div class="kv">Resource spend</div>
+      <div class="metricline">
+        ${ev.metrics.total_tokens!=null?`🔢 ${fmtTokens(ev.metrics.total_tokens)} tokens (${fmtTokens(ev.metrics.input_tokens)} in / ${fmtTokens(ev.metrics.output_tokens)} out)`:""}
+        ${ev.metrics.cost_usd!=null?` &nbsp;·&nbsp; 💲 ${fmtCost(ev.metrics.cost_usd)}`:""}
+        ${ev.metrics.duration_ms!=null?` &nbsp;·&nbsp; ⏱ ${fmtDur(ev.metrics.duration_ms)}`:""}
+      </div>`:""}
+    ${issues.length?`<div class="kv">Blocking issues</div><ul class="issues">${issues.map(i=>`<li>${esc(i)}</li>`).join("")}</ul>`:""}
+  `;
+}
+
+// ---- render: run metrics ------------------------------------------------
+function tile(label, val, sub, accent){
+  return `<div class="tile${accent?" accent":""}"><div class="label">${esc(label)}</div>
+          <div class="val">${val}</div>${sub?`<div class="sub2">${sub}</div>`:""}</div>`;
+}
+function renderStats(events, state){
+  const a = aggregate(events, state);
+  const tokenSub = a.haveTok ? `${fmtTokens(a.inTok)} in · ${fmtTokens(a.outTok)} out` : "no agent metrics yet";
+  const retryAgents = Object.keys(a.retriesByAgent).length;
+  $("stats").innerHTML =
+    tile("Agent time", a.haveDur ? fmtDur(a.agentMs) : "—", "sum of agent calls") +
+    tile("Tokens", a.haveTok ? fmtTokens(a.inTok+a.outTok) : "—", tokenSub, true) +
+    tile("Cost", a.haveCost ? fmtCost(a.cost) : "—", "total spend", true) +
+    tile("Agent runs", String(a.runs), "events logged") +
+    tile("Retries", String(a.totalRetries), retryAgents?`across ${retryAgents} agent${retryAgents>1?"s":""}`:"none");
+  // per-agent breakdowns: time + retries
+  $("retrybreak").innerHTML =
+    chipBlock("Time by agent", a.timeByAgent, v=>fmtDur(v), "time") +
+    (a.totalRetries
+      ? chipBlock("Retries by agent", a.retriesByAgent, v=>"×"+v, "retry")
+      : "");
+}
+function chipBlock(label, byAgent, fmtVal, cls){
+  const entries=Object.entries(byAgent||{});
+  if(!entries.length) return "";
+  const rows=entries.sort((x,y)=>y[1]-x[1])
+    .map(([ag,v])=>`<span class="rchip ${cls}">${esc(ag)} <b>${esc(fmtVal(v))}</b></span>`).join("");
+  return `<div class="rblabel">${esc(label)}</div><div class="rchips">${rows}</div>`;
+}
+
+// ---- render: live agent activity ----------------------------------------
+function activeTaskId(state){
+  const tasks = state?.tasks || {};
+  let inprog=null, recent=null;
+  for(const [id,t] of Object.entries(tasks)){
+    if(t.status==="in_progress") inprog=id;
+    if(t.started_at && (!recent || (tasks[recent].started_at||"") < t.started_at)) recent=id;
+  }
+  return inprog || recent;
+}
+const TOOL_ICON = {Read:"📖",Write:"✍️",Edit:"✏️",Bash:"⚙️",Glob:"🔍",Grep:"🔍",Task:"🤖",WebFetch:"🌐"};
+function stepRow(s){
+  if(s.kind==="start") return "";
+  let ic="•", body="";
+  if(s.kind==="tool"){
+    ic=TOOL_ICON[s.tool]||"🔧";
+    body=`<span class="tool">${esc(s.tool||"")}</span> <span class="det">${esc(s.detail||"")}</span>`;
+  } else if(s.kind==="text"){
+    ic="💬"; body=`<span class="msg">${esc(s.text||"")}</span>`;
+  } else if(s.kind==="result"){
+    ic=s.status==="success"?"✅":"⚠️"; body=`<span class="det">finished — ${esc(s.status||"")}</span>`;
+  }
+  return `<div class="step ${esc(s.kind)}"><div class="t">${esc(s.ts||"")}</div><div class="ic">${ic}</div><div>${body}</div></div>`;
+}
+function renderActivity(taskId, steps, state){
+  const a=$("activity"); const t=state?.tasks?.[taskId];
+  $("activetask").textContent = taskId ? `· ${taskId}` : "";
+  if(!taskId || !steps || !steps.length){
+    a.innerHTML=`<div class="empty">No live trace yet — real agent runs stream their tool calls here.</div>`; return;
+  }
+  const head=steps.find(s=>s.kind==="start"); const status=t?.status||"";
+  const pill = status==="success"?"success":status==="blocked"?"blocked":"retry";
+  a.innerHTML = `<div class="activehead">${esc(head?.agent||"agent")} · ${esc(head?.title||"")}
+      <span class="pill ${pill}">${esc(status||"running")}</span></div>
+    <div class="feed">${steps.map(stepRow).join("")}</div>`;
+  const feed=a.querySelector(".feed"); if(feed) feed.scrollTop=feed.scrollHeight;
+}
+
+function renderAll(){
+  const byStage = {};
+  lastEvents.forEach(e=>{ byStage[e.stage]=e; });
+  renderPipeline(lastState, byStage);
+  renderStats(lastEvents, lastState);
+  renderTimeline(lastEvents);
+  renderDetail(lastEvents, lastState);
+}
+
+// ---- header + liveness --------------------------------------------------
+function setLive(ok, msg){
+  $("dot").className = "dot" + (ok?"":" stale");
+  $("livetxt").textContent = msg;
+}
+function renderHeader(state){
+  $("wfid").textContent = state?.workflow_id ? state.workflow_id.slice(0,8) : "—";
+  $("stage").textContent = (state?.current_stage||"—").replace(/_/g," ");
+  const ov = state?.current_stage==="complete" ? "✅ complete"
+           : state?.current_stage==="failed" ? "❌ failed" : "running";
+  $("overall").textContent = ov;
+}
+
+// ---- poll loop ----------------------------------------------------------
+async function tick(){
+  try{
+    const [events, state] = await Promise.all([
+      getJSONL(base()+"/events.log.jsonl").catch(()=>[]),
+      getJSON(base()+"/workflow_state.json").catch(()=>null),
+    ]);
+    lastEvents = events; lastState = state;
+    $("err").innerHTML = "";
+    renderHeader(state);
+    renderAll();
+    // live agent activity for the active task (best-effort; absent for replay/old runs)
+    const tid = activeTaskId(state);
+    let steps = [];
+    if(tid){ try{ steps = await getJSONL(base()+"/agent-trace/"+encodeURIComponent(tid)+".jsonl"); }catch{ steps=[]; } }
+    renderActivity(tid, steps, state);
+    const stamp = new Date().toLocaleTimeString();
+    setLive(true, `live · updated ${stamp}`);
+  }catch(e){
+    setLive(false, "disconnected");
+    if(location.protocol==="file:"){
+      $("err").innerHTML = `<div class="errbar">⚠️ Opened via <code>file://</code> — the browser blocks reading local files, so auto-refresh won't work.
+        Run <code>python3 -m http.server 8777</code> from the repo root and open
+        <code>http://localhost:8777/observability/dashboard.html</code> instead.</div>`;
+    }else{
+      $("err").innerHTML = `<div class="errbar">⚠️ ${esc(e.message)} — check the project name and that the server runs from the repo root.</div>`;
+    }
+  }
+}
+
+// ---- init ---------------------------------------------------------------
+(async function init(){
+  const sel = $("project");
+  const initial = qp.get("project");
+  const discovered = await discoverProjects();
+  const opts = [...new Set([...(initial?[initial]:[]), ...discovered, ...KNOWN_PROJECTS])];
+  opts.forEach(p=>{ const o=document.createElement("option"); o.value=o.textContent=p; sel.appendChild(o); });
+  if(initial) sel.value = initial;
+  sel.onchange = ()=>{ lastEvents=[]; lastState=null; window.sel=null; tick(); };
+  tick();
+  setInterval(tick, POLL_MS);
+})();
+</script>
+</body>
+</html>

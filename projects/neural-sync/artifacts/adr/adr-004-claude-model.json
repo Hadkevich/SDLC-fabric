@@ -1,0 +1,64 @@
+{
+  "id": "ADR-004",
+  "title": "LLM Provider & Model Selection for the Explanation Layer",
+  "status": "accepted",
+  "context": "The explanation layer uses a configurable, provider-agnostic LLM. Task04 §3 mandates Claude Code agent integration for BUILDING the system (satisfied by the SDLC pipeline); the runtime explanation LLM is not vendor-pinned. Phase-1 uses Google Gemini (gemini-1.5-flash, free tier) to minimize pilot cost; Claude API (claude-3-5-haiku) is a supported alternate. All prompt templates are stored as versioned, auditable artifacts (not inline strings), meaning the model identifier is a field in the prompt artifact — model/provider upgrades require no source code changes, only a prompt artifact version bump. Per ADR-003, LLM calls are asynchronous and outside the 500ms SLA, so latency is not a primary selection criterion. The selection criteria are: (1) explanation quality — output must reliably contain one skill-alignment statement, one behavioral/work-style statement, and one growth/career statement per AC3; (2) cost at MVP scale (estimated 500–5,000 explanation calls/day during pilot); (3) compatibility with the versioned prompt template approach; (4) availability and rate-limit headroom on the LLM provider's API.",
+  "options_considered": [
+    {
+      "name": "Google Gemini (gemini-1.5-flash) — Phase-1 default",
+      "pros": [
+        "Free tier available via Google AI Studio: zero cost at MVP pilot scale",
+        "Fast response time (~400–900ms for a 250-token explanation), reducing async queue drain time",
+        "Sufficient for structured template-driven output where the prompt tightly constrains the explanation format (three mandatory sentence types)",
+        "Easily upgradeable: model change requires only editing the prompt artifact JSON — no code change"
+      ],
+      "cons": [
+        "Free tier has rate limits that may require throttling under burst load",
+        "Requires GEMINI_API_KEY environment variable; developers must obtain a key from Google AI Studio"
+      ]
+    },
+    {
+      "name": "claude-3-haiku-20240307 (claude-3-haiku)",
+      "pros": [
+        "Lowest cost among Claude 3 models: ~$0.25/M input tokens, ~$1.25/M output tokens — approximately 20× cheaper than Opus",
+        "Fastest response time among Claude 3 models (~400–800ms for a 250-token explanation), reducing async queue drain time",
+        "Sufficient for structured template-driven output where the prompt tightly constrains the explanation format (three mandatory sentence types)",
+        "High rate limits on Anthropic API allow throughput scaling without quota concerns at MVP scale",
+        "Easily upgradeable: model change requires only editing the prompt artifact JSON — no code change"
+      ],
+      "cons": [
+        "Occasionally produces less nuanced or more formulaic explanations than larger models, particularly for edge-case profile combinations",
+        "May require more explicit prompt engineering to reliably produce the three mandatory sentence components on adversarial or ambiguous inputs",
+        "Requires paid Anthropic API key"
+      ]
+    },
+    {
+      "name": "claude-3-5-sonnet-20241022 (claude-3-5-sonnet)",
+      "pros": [
+        "Significantly better reasoning and explanation quality vs Haiku, especially for nuanced behavioral alignment analysis",
+        "More robust against adversarial or incomplete profile inputs",
+        "Better at multi-step reasoning in a single prompt (skill + behavioral + growth in one coherent paragraph)"
+      ],
+      "cons": [
+        "~3× more expensive than Haiku (~$3/M input, ~$15/M output)",
+        "Slower (~800–2000ms per explanation), increasing async queue processing time",
+        "Quality difference is partially offset by the structured prompt template that constrains output format regardless of model capability"
+      ]
+    },
+    {
+      "name": "claude-3-opus-20240229 (claude-3-opus)",
+      "pros": [
+        "Highest explanation quality; most sophisticated behavioral reasoning",
+        "Best at detecting subtle work-style incompatibilities and articulating growth potential"
+      ],
+      "cons": [
+        "~15× more expensive than Haiku (~$15/M input, ~$75/M output); prohibitive for MVP pilot at any meaningful scale",
+        "Slowest model; async queue back-pressure under load",
+        "Explanation quality advantage is marginal for structured, template-constrained outputs — the prompt artifact already defines the required sections"
+      ]
+    }
+  ],
+  "decision": "Use Google Gemini (gemini-1.5-flash) as the Phase-1 default for the explanation layer (free tier minimizes pilot cost). The model identifier is stored as a field in the versioned prompt artifact (artifacts/prompts/match_explanation_v1.json) under the key 'model_name'. Claude API (claude-3-5-haiku) is a supported alternate, selectable by changing only the prompt artifact's model_name field — no source change required. The prompt template is structured to enforce three mandatory explanation sections via numbered output format instructions, so any provider reliably produces the required skill-alignment, behavioral-alignment, and growth/career statements. A regression test in the QA suite validates that the explanation output always contains all three section types, alerting the team to prompt drift after any model or provider change.",
+  "consequences": "Explanation quality at MVP scale is sufficient for pilot validation at zero LLM cost (Gemini free tier). To switch to Claude API (claude-3-5-haiku-20241022 for production hardening), a new prompt artifact version (match_explanation_v2.json) is published with only the model_name field changed; no Python source files are modified. Cost estimate for Claude API comparison: 5,000 explanations/day at ~300 tokens input + ~200 tokens output per call = ~$1.50/day (Haiku) vs ~$22.50/day (Sonnet). The prompt artifact must include explicit output format constraints (e.g., 'Section 1: Skill Alignment — [sentence]. Section 2: Behavioral Fit — [sentence]. Section 3: Growth Potential — [sentence].') to ensure reliable structured output regardless of provider. The explanation structure regression test (AC3, AC12) is mandatory — it acts as the early-warning system for model version drift or prompt degradation. If the regression test failure rate exceeds 5% in production monitoring, the migration playbook is to increment the prompt artifact to v2 with an alternative provider/model, requiring zero source code changes.",
+  "created_at": "2026-06-26T00:00:00Z"
+}

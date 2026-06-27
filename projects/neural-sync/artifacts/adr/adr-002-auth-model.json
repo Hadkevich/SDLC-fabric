@@ -1,0 +1,55 @@
+{
+  "id": "ADR-002",
+  "title": "Authentication Model for MVP Dashboard Access",
+  "status": "accepted",
+  "context": "NEURAL SYNC Phase 1 includes two browser-based dashboard views — a Developer Dashboard (showing ranked project recommendations for the authenticated developer) and a Manager Dashboard (showing team composition health and risk alerts). Both views require user identity to scope data access: developers must see only their own recommendations and risk data; managers must see their team's data without exposing raw behavioral vectors. The requirements explicitly exclude SSO and external identity-provider integration from Phase 1 scope. The system must also protect the match and feedback API endpoints from unauthenticated access. The open question is whether to use static API keys (per-user) or JWT tokens issued via a local username/password login flow.",
+  "options_considered": [
+    {
+      "name": "API-key per user (X-API-Key header)",
+      "pros": [
+        "Trivially simple to implement: store hashed key in users table, compare on each request",
+        "Works for machine-to-machine programmatic access without browser session",
+        "No login endpoint or token lifecycle management needed"
+      ],
+      "cons": [
+        "Keys do not expire naturally; rotation requires explicit DB update and key re-distribution",
+        "Not idiomatic for browser-based SPA dashboards: API keys must be stored in browser (localStorage or cookie) where they are long-lived theft targets",
+        "No built-in role differentiation without an extra lookup per request",
+        "No standard revocation mechanism; a compromised key grants access until manually rotated",
+        "Poor developer UX: dashboards must include a mechanism to copy/paste the API key into browser storage"
+      ]
+    },
+    {
+      "name": "JWT with local username/password login (no external IdP)",
+      "pros": [
+        "Industry-standard pattern for SPA + REST API: POST /api/v1/auth/login returns access_token + refresh_token",
+        "Stateless validation: each API replica validates the JWT signature without a DB round-trip (using shared secret or asymmetric key)",
+        "Roles (developer, manager) embedded in JWT claims; no extra DB lookup per request for role check",
+        "Configurable token expiry (access token TTL=1h, refresh token TTL=7d) limits blast radius of token theft",
+        "Browser stores access token in memory (not localStorage) for security; refresh token in HttpOnly cookie",
+        "Natural path to SSO in Phase 2: replace POST /auth/login with OIDC redirect without changing any API endpoint signatures"
+      ],
+      "cons": [
+        "Requires implementing POST /auth/login and POST /auth/refresh endpoints",
+        "Token revocation requires a blocklist (Redis or DB table) for immediate logout; Phase 1 accepts TTL-based expiry without active revocation to avoid Redis dependency",
+        "Slightly more implementation surface than a simple API key check"
+      ]
+    },
+    {
+      "name": "Server-side session (session cookie + server state)",
+      "pros": [
+        "Simple logout via server-side session invalidation",
+        "No token storage concerns on client"
+      ],
+      "cons": [
+        "Stateful: session store (Redis or DB) required on every API replica, complicating horizontal scaling",
+        "Adds Redis as an operational dependency for Phase 1 MVP where it would only be used for sessions",
+        "Cookie-based sessions complicate CORS setup for React SPA served from a different origin",
+        "Not compatible with the planned stateless horizontal-scaling architecture"
+      ]
+    }
+  ],
+  "decision": "Use JWT with local username/password login. FastAPI exposes POST /api/v1/auth/login (accepts username + password, returns access_token [JWT, TTL=1h] and refresh_token [opaque token, TTL=7d stored in HttpOnly cookie]). POST /api/v1/auth/refresh issues a new access token. All protected API endpoints require Authorization: Bearer <access_token>. JWT payload includes: sub (user_id), role ('developer' | 'manager'), iat, exp. Token signature uses HS256 with a server-side secret loaded from environment variable NEURAL_SYNC_JWT_SECRET. No active revocation in Phase 1 (TTL-based expiry is sufficient for MVP). User accounts (UserAccount entity with hashed password via bcrypt) are seeded alongside the synthetic developer profile fixture. Phase 2 SSO integration replaces POST /auth/login with an OIDC flow without changing any downstream endpoint signatures.",
+  "consequences": "All API endpoints (except health check and POST /auth/login) require a valid JWT in the Authorization header. The JWT middleware in the FastAPI api-gateway component extracts role from claims and enforces authorization rules: developers can only read their own profile and recommendations; managers can read team-level data. Raw behavioral vectors (work_style, motivation_vector) are never included in JWT claims or manager-facing API responses — only aggregated risk scores. The React frontend stores the access token in memory (not localStorage) and reads the refresh token from the HttpOnly cookie set by the login endpoint. This satisfies the acceptance criteria that managers cannot see raw behavioral vectors, since the JWT role check gates API-level field filtering.",
+  "created_at": "2026-06-26T00:00:00Z"
+}

@@ -1,0 +1,22 @@
+*.ds_store
+__pycache__/
+.claude/worktrees/
+.idea/
+
+# Generated projects under projects/ are now tracked as real source,
+# but never vendor/build/cache junk:
+**/node_modules/
+**/dist/
+**/.pytest_cache/
+**/.venv/
+**/venv/
+# Live per-task agent activity traces are scratch, not source:
+projects/*/artifacts/agent-trace/
+
+# Secrets — commit only .env.example, never real env files:
+**/.env
+**/.env.*
+!**/.env.example
+
+# Personal Claude Code settings (machine-specific) — never commit:
+.claude/settings.local.json

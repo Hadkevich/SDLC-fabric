@@ -1,0 +1,27 @@
+{
+  "spec_version": "v1",
+  "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
+  "environment": "local",
+  "artifact_ref": "neural-sync:not-built",
+  "deploy_command": "",
+  "health_checks": [
+    {
+      "name": "gate-check-review",
+      "endpoint": "artifacts/review_report.json",
+      "expected": "verdict in {approved, approved_with_comments}",
+      "actual": "rejected",
+      "status": "fail"
+    },
+    {
+      "name": "gate-check-tests",
+      "endpoint": "artifacts/test_plan.json",
+      "expected": "summary.failed == 0",
+      "actual": "0",
+      "status": "pass"
+    }
+  ],
+  "rollback_available": false,
+  "verdict": "failed",
+  "notes": "Deployment aborted: review gate failed. review_report.json verdict is 'rejected' (required: approved or approved_with_comments). Blocking issue BLK-001: GET /teams/{team_id}/risk-summary (src/api/feedback.py:248) returns HTTP 501 Not Implemented instead of HTTP 200 + TeamRiskSummary, making AC8 (Manager Dashboard risk badges) non-functional at runtime. The test gate passed: test_plan.json summary.failed=0 (77/77 tests passed). No Docker image was built and no container was started. Re-run deployment after the developer resolves BLK-001 and the reviewer approves.",
+  "deployed_at": "2026-06-27T10:30:00Z"
+}

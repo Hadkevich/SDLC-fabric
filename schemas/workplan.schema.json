@@ -1,0 +1,70 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Workplan",
+    "type": "object",
+    "required": [
+        "spec_version",
+        "workflow_id",
+        "tasks"
+    ],
+    "properties": {
+        "spec_version": {
+            "type": "string",
+            "const": "v1"
+        },
+        "workflow_id": {
+            "type": "string"
+        },
+        "tasks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "task_id",
+                    "title",
+                    "owner_agent",
+                    "inputs",
+                    "outputs",
+                    "depends_on",
+                    "done_criteria"
+                ],
+                "properties": {
+                    "task_id": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "owner_agent": {
+                        "type": "string"
+                    },
+                    "inputs": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "outputs": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "depends_on": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "done_criteria": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "additionalProperties": true
+}

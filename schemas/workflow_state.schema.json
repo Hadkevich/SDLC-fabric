@@ -1,0 +1,102 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "WorkflowState",
+    "type": "object",
+    "required": ["spec_version", "workflow_id", "current_stage", "stages", "created_at", "updated_at"],
+    "additionalProperties": false,
+    "properties": {
+        "spec_version": { "type": "string", "const": "v1" },
+        "workflow_id": { "type": "string" },
+        "current_stage": {
+            "type": "string",
+            "enum": [
+                "requirement_ingestion",
+                "task_decomposition",
+                "planning_architecture",
+                "code_generation",
+                "code_review",
+                "testing_validation",
+                "deployment",
+                "monitoring_feedback",
+                "complete",
+                "failed"
+            ]
+        },
+        "stages": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "required": ["status", "attempt"],
+                "additionalProperties": false,
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "awaiting_approval", "success", "failure", "blocked", "halted", "skipped"]
+                    },
+                    "attempt": { "type": "integer", "minimum": 0 },
+                    "agent": { "type": "string" },
+                    "started_at": { "type": "string", "format": "date-time" },
+                    "completed_at": { "type": "string", "format": "date-time" },
+                    "artifact_refs": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "blocking_issues": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "escalated": { "type": "boolean" }
+                }
+            }
+        },
+        "tasks": {
+            "description": "Optional per-task DAG state, keyed by workplan task_id. Lets the orchestrator schedule and retry individual tasks (SPEC §8.5).",
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "required": ["status", "attempt"],
+                "additionalProperties": false,
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "awaiting_approval", "success", "failure", "blocked", "halted", "skipped"]
+                    },
+                    "attempt": { "type": "integer", "minimum": 0 },
+                    "rework": {
+                        "description": "Count of review->fix rework rounds applied to this task's subtree (SPEC §8.3). Capped at max_rework before escalation.",
+                        "type": "integer",
+                        "minimum": 0
+                    },
+                    "owner_agent": { "type": "string" },
+                    "stage": { "type": "string" },
+                    "depends_on": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "started_at": { "type": "string", "format": "date-time" },
+                    "completed_at": { "type": "string", "format": "date-time" },
+                    "artifact_refs": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "blocking_issues": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                }
+            }
+        },
+        "halted": {
+            "description": "Kill switch (SPEC §8.6). When true, the orchestrator dispatches no new work.",
+            "type": "boolean"
+        },
+        "max_retries": { "type": "integer", "default": 3 },
+        "max_rework": {
+            "description": "Bounded review->fix rework rounds before a rejected review escalates (SPEC §8.3).",
+            "type": "integer",
+            "default": 2
+        },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+    }
+}

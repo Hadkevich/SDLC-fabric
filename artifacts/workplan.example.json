@@ -1,0 +1,100 @@
+{
+    "spec_version": "v1",
+    "workflow_id": "wf-habit-tracker-001",
+    "tasks": [
+        {
+            "task_id": "T-001",
+            "title": "Define data model and persistence layer",
+            "owner_agent": "architect-agent",
+            "inputs": ["artifacts/requirements.json", "artifacts/architecture.json"],
+            "outputs": ["artifacts/data-model.json"],
+            "depends_on": [],
+            "done_criteria": [
+                "data-model.json validates against schemas/architecture.schema.json",
+                "Habit and Completion entities are defined with all fields",
+                "Persistence choice (SQLite) is documented in an ADR"
+            ]
+        },
+        {
+            "task_id": "T-002",
+            "title": "Define REST API contracts",
+            "owner_agent": "architect-agent",
+            "inputs": ["artifacts/requirements.json", "artifacts/data-model.json"],
+            "outputs": ["artifacts/api-contracts.json"],
+            "depends_on": ["T-001"],
+            "done_criteria": [
+                "All CRUD endpoints for habits are specified",
+                "Completion endpoint is specified",
+                "Request/response shapes include types and validation rules",
+                "Error response format is standardized"
+            ]
+        },
+        {
+            "task_id": "T-003",
+            "title": "Implement habit CRUD endpoints",
+            "owner_agent": "developer-agent",
+            "inputs": ["artifacts/api-contracts.json", "artifacts/data-model.json"],
+            "outputs": ["src/", "artifacts/code_spec.json"],
+            "depends_on": ["T-002"],
+            "done_criteria": [
+                "POST /habits creates a habit and persists it",
+                "GET /habits returns all habits",
+                "GET /habits/:id returns a single habit",
+                "PUT /habits/:id updates a habit",
+                "DELETE /habits/:id removes a habit",
+                "All responses match api-contracts.json shapes"
+            ]
+        },
+        {
+            "task_id": "T-004",
+            "title": "Implement habit completion endpoint",
+            "owner_agent": "developer-agent",
+            "inputs": ["artifacts/api-contracts.json", "artifacts/data-model.json"],
+            "outputs": ["src/", "artifacts/code_spec.json"],
+            "depends_on": ["T-003"],
+            "done_criteria": [
+                "POST /habits/:id/completions marks a habit complete for a given date",
+                "Duplicate completion for same date returns 409",
+                "Response matches api-contracts.json shape"
+            ]
+        },
+        {
+            "task_id": "T-005",
+            "title": "Write and run test suite",
+            "owner_agent": "qa-agent",
+            "inputs": ["artifacts/requirements.json", "artifacts/api-contracts.json", "src/"],
+            "outputs": ["tests/", "artifacts/test_plan.json"],
+            "depends_on": ["T-004"],
+            "done_criteria": [
+                "All acceptance criteria from requirements.json have at least one test",
+                "All tests pass",
+                "test_plan.json summary shows 0 failed"
+            ]
+        },
+        {
+            "task_id": "T-006",
+            "title": "Code review",
+            "owner_agent": "reviewer-agent",
+            "inputs": ["src/", "artifacts/requirements.json", "artifacts/api-contracts.json", "artifacts/test_plan.json"],
+            "outputs": ["artifacts/review_report.json"],
+            "depends_on": ["T-005"],
+            "done_criteria": [
+                "review_report.json verdict is approved or approved_with_comments",
+                "No blocking_issues present"
+            ]
+        },
+        {
+            "task_id": "T-007",
+            "title": "Deploy and health-check",
+            "owner_agent": "devops-agent",
+            "inputs": ["src/", "artifacts/review_report.json"],
+            "outputs": ["artifacts/release_report.json"],
+            "depends_on": ["T-006"],
+            "done_criteria": [
+                "Application starts with documented start command",
+                "GET /healthz returns 200",
+                "release_report.json verdict is success"
+            ]
+        }
+    ]
+}

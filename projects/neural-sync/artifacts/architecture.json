@@ -1,0 +1,354 @@
+{
+  "spec_version": "v1",
+  "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
+  "components": [
+    {
+      "id": "api-gateway",
+      "name": "API Gateway (FastAPI Application)",
+      "type": "gateway",
+      "responsibilities": [
+        "Expose all REST API routes under /api/v1/ prefix with OpenAPI 3.1 documentation at /docs",
+        "Enforce JWT authentication middleware: validate Authorization: Bearer token on all protected routes, extract role from JWT claims (developer | manager)",
+        "Issue JWT access tokens (TTL=1h) and refresh tokens (TTL=7d, HttpOnly cookie) via POST /api/v1/auth/login and POST /api/v1/auth/refresh",
+        "Rate-limit inbound requests per user (100 req/min per developer, 200 req/min per manager) to prevent quota exhaustion on the LLM explanation provider API",
+        "Validate request payloads against Pydantic models derived from OpenAPI schemas before delegating to service modules",
+        "Mount and coordinate all service modules: profile ingestion, matching engine, explanation, risk, erasure, feedback, analytics, weight config",
+        "Expose GET /api/v1/health endpoint (no auth required) for deployment health-check",
+        "Return standardized error envelope: {error_code, message, request_id} on all 4xx and 5xx responses"
+      ],
+      "interfaces": [
+        {
+          "name": "rest-api-inbound",
+          "type": "http",
+          "ref": "artifacts/api-contracts.json"
+        }
+      ],
+      "depends_on": [
+        "profile-ingestion-service",
+        "matching-engine",
+        "claude-explanation-service",
+        "risk-prediction-engine",
+        "gdpr-erasure-handler",
+        "feedback-analytics-service",
+        "relational-db"
+      ]
+    },
+    {
+      "id": "profile-ingestion-service",
+      "name": "Profile Ingestion Service",
+      "type": "service",
+      "responsibilities": [
+        "CRUD operations for DeveloperProfile: POST /api/v1/developers, GET /api/v1/developers/{id}, PUT /api/v1/developers/{id}, DELETE (delegated to GDPR handler)",
+        "CRUD operations for ProjectProfile: POST /api/v1/projects, GET /api/v1/projects/{id}, PUT /api/v1/projects/{id}, DELETE /api/v1/projects/{id}",
+        "Validate all required DeveloperProfile fields on ingest: id, skills (list), experience_years, preferred_stack (list), work_style vector (list[float], len=8), motivation_vector (list[float], len=8), timezone (IANA string), availability_hours (int), career_goals (list[string]), project_history (list)",
+        "Validate all required ProjectProfile fields: id, required_skills, team_structure, workload_intensity (float 0.0–1.0), innovation_level (float 0.0–1.0), timezone_overlap_required (string), duration_weeks (int), growth_opportunities (list)",
+        "Flag profiles where behavioral vectors (work_style, motivation_vector) are self-reported vs inferred via is_self_reported boolean field",
+        "Enqueue embedding generation task to embedding-worker after every profile create or update",
+        "Persist and serve WeightConfig via GET/PUT /api/v1/config/weights; validate that |sum(w1..w5) - 1.0| < 0.001 and each wi >= 0.0 before persisting"
+      ],
+      "interfaces": [
+        {
+          "name": "profile-service-http",
+          "type": "http"
+        }
+      ],
+      "depends_on": [
+        "relational-db",
+        "embedding-worker"
+      ]
+    },
+    {
+      "id": "matching-engine",
+      "name": "Matching Engine",
+      "type": "service",
+      "responsibilities": [
+        "Compute MATCH_SCORE = w1*skill_score + w2*workstyle_score + w3*motivation_score + w4*timezone_score + w5*growth_score for a given (DeveloperProfile, ProjectProfile) pair",
+        "Load runtime-configurable weights w1–w5 from WeightConfig table on each match request (no in-process caching to ensure weight changes take effect immediately)",
+        "Compute skill_score as Jaccard similarity between developer.skills and project.required_skills weighted by experience_years relevance",
+        "Compute workstyle_score as cosine similarity between developer.work_style vector and project team_structure behavioral profile embedding (queried from vector-embedding-store)",
+        "Compute motivation_score as cosine similarity between developer.motivation_vector and project.innovation_level + growth_opportunities embedding",
+        "Compute timezone_score from overlap between developer.timezone and project.timezone_overlap_required using a time-zone distance matrix",
+        "Compute growth_score by matching developer.career_goals against project.growth_opportunities using keyword overlap and ANN embedding similarity",
+        "Persist MatchRecord with developer_id, project_id, match_score, component scores, weights_snapshot, explanation (stub or cached), explanation_source, risks, growth_potential, and timestamp",
+        "Expose POST /api/v1/matches and GET /api/v1/matches/{match_id} and GET /api/v1/developers/{id}/matches",
+        "Return top-K ranked project recommendations for a given developer on GET /api/v1/developers/{id}/matches?top_k=10",
+        "Expose POST /api/v1/matches/rescore endpoint to re-rank all or subset of matches on demand (batch re-optimization)"
+      ],
+      "interfaces": [
+        {
+          "name": "match-service-http",
+          "type": "http"
+        }
+      ],
+      "depends_on": [
+        "relational-db",
+        "vector-embedding-store"
+      ]
+    },
+    {
+      "id": "claude-explanation-service",
+      "name": "Claude Explanation Service",
+      "type": "service",
+      "responsibilities": [
+        "Load versioned prompt template from artifacts/prompts/match_explanation_v1.json at service startup; reload on SIGHUP for zero-downtime prompt updates",
+        "Produce synchronous deterministic stub explanation in <10ms from match scoring data when cache miss occurs; stub must contain skill-alignment sentence, behavioral-fit sentence, and growth-potential sentence to satisfy AC3",
+        "Enqueue asynchronous LLM API call for full explanation after stub is returned; call the configured LLM provider per ADR-004 (Phase-1: Google Gemini gemini-1.5-flash; Claude API claude-3-5-haiku is a supported alternate)",
+        "Cache full LLM explanations keyed on SHA-256(developer_profile_hash + project_profile_hash + weights_snapshot_hash); cache stored in relational-db ExplanationCache table with TTL=7 days",
+        "Invalidate cache entries on PUT /api/v1/config/weights (weights_snapshot_hash changes)",
+        "Implement retry with exponential backoff (3 attempts, initial delay 1s, max delay 8s) for LLM API failures",
+        "Return explanation_source ENUM field: 'stub_pending', 'claude_cached', 'claude_async' to allow clients and tests to distinguish explanation maturity",
+        "Expose GET /api/v1/matches/{match_id}/explanation for clients to poll for the full LLM explanation",
+        "Never expose raw work_style or motivation_vector values to the LLM prompt; pass only computed dimension scores and profile metadata"
+      ],
+      "interfaces": [
+        {
+          "name": "explanation-service-http",
+          "type": "http"
+        },
+        {
+          "name": "claude-api-outbound",
+          "type": "sdk"
+        }
+      ],
+      "depends_on": [
+        "relational-db"
+      ]
+    },
+    {
+      "id": "risk-prediction-engine",
+      "name": "Risk Prediction Engine",
+      "type": "service",
+      "responsibilities": [
+        "Compute burnout_risk_score (float 0.0–1.0) for a developer: score > 0.6 when AllocationRecord shows >= 48 consecutive weeks at workload_intensity >= 0.8; formula: burnout_risk = min(1.0, (consecutive_high_intensity_weeks / 48) * workload_intensity_mean * (1 - motivation_alignment_factor))",
+        "Compute bench_risk_score (float 0.0–1.0): score > 0.7 when developer's current project end_date is within 28 days and no AllocationRecord with start_date in the next 28 days exists; formula: bench_risk = min(1.0, max(0.0, (28 - days_until_end) / 28))",
+        "Expose GET /api/v1/developers/{id}/risk returning {developer_id, burnout_risk_score, bench_risk_score, computed_at}",
+        "Expose GET /api/v1/teams/{team_id}/risk-summary returning aggregated risk distribution for manager dashboard (no raw vectors, only risk scores and badge states)",
+        "Support batch risk refresh via POST /api/v1/risk/refresh to re-compute scores for all developers on schedule"
+      ],
+      "interfaces": [
+        {
+          "name": "risk-service-http",
+          "type": "http"
+        }
+      ],
+      "depends_on": [
+        "relational-db"
+      ]
+    },
+    {
+      "id": "gdpr-erasure-handler",
+      "name": "GDPR Erasure Handler",
+      "type": "service",
+      "responsibilities": [
+        "Orchestrate full cascade deletion for DELETE /api/v1/developers/{id}: execute as a single PostgreSQL transaction covering (1) DeveloperProfile row deletion, (2) all developer_embeddings rows for the developer_id, (3) all MatchRecord rows where developer_id matches, (4) all FeedbackRecord rows where developer_id matches, (5) all AllocationRecord rows, (6) ExplanationCache entries keyed to the developer",
+        "Return HTTP 204 on successful erasure; return HTTP 404 if developer_id not found",
+        "If transaction fails (e.g., pgvector deletion error), roll back entire transaction and return HTTP 500 with error detail; log failure to audit table for manual remediation",
+        "Create an ErasureAuditLog entry on each DELETE request recording: developer_id, requested_at, completed_at, status (completed | failed), initiating_user_id",
+        "Expose GET /api/v1/admin/erasure-audit/{developer_id} (manager-role only) to verify erasure completion for compliance reporting",
+        "After transaction commit, validate developer is no longer accessible: internal GET by developer_id must return None from DB"
+      ],
+      "interfaces": [
+        {
+          "name": "erasure-service-http",
+          "type": "http"
+        }
+      ],
+      "depends_on": [
+        "relational-db",
+        "vector-embedding-store"
+      ]
+    },
+    {
+      "id": "feedback-analytics-service",
+      "name": "Feedback and Analytics Service",
+      "type": "service",
+      "responsibilities": [
+        "Store FeedbackRecord on POST /api/v1/matches/feedback: persist developer_id, match_id, accepted (boolean), feedback_timestamp; return HTTP 201",
+        "Compute rejection_ratio on GET /api/v1/analytics/rejection-rate?developer_id={id}: rejection_ratio = count(accepted=false) / count(*) from FeedbackRecord for developer_id; return {developer_id, rejection_ratio, sample_count, min_sample_floor_met (bool)}",
+        "Enforce minimum sample floor: return min_sample_floor_met=false and rejection_ratio=null when sample_count < 10 (per requirements risk mitigation) to avoid surfacing statistically unreliable alerts to managers",
+        "Expose GET /api/v1/analytics/team-rejection-rate?team_id={id} for manager dashboard aggregated view",
+        "Expose GET /api/v1/analytics/match-stats?developer_id={id} returning total_matches, accepted_count, rejected_count, rejection_ratio (or null if below floor)",
+        "Never expose raw behavioral vectors or match component scores in analytics responses; only aggregate rejection statistics"
+      ],
+      "interfaces": [
+        {
+          "name": "feedback-service-http",
+          "type": "http"
+        }
+      ],
+      "depends_on": [
+        "relational-db"
+      ]
+    },
+    {
+      "id": "embedding-worker",
+      "name": "Embedding Generation Worker",
+      "type": "worker",
+      "responsibilities": [
+        "Consume embedding generation tasks enqueued by profile-ingestion-service via FastAPI BackgroundTasks (Phase 1 in-process queue; Phase 2 migrate to Celery + Redis if throughput demands it)",
+        "Generate skill embedding: encode developer.skills + developer.preferred_stack + developer.experience_years as text and compute 1536-dim vector via text-embedding model (OpenAI text-embedding-3-small or local sentence-transformers/all-MiniLM-L6-v2)",
+        "Generate behavioral embedding: encode developer.work_style vector + developer.motivation_vector + developer.career_goals as structured text and compute 1536-dim vector",
+        "Generate project skill embedding: encode project.required_skills + project.team_structure as text",
+        "Upsert embeddings into developer_embeddings / project_embeddings pgvector tables",
+        "Mark developer profile embedding_status as 'ready' in DeveloperProfile table after successful embedding; mark as 'failed' and enqueue retry on error",
+        "Batch re-embed all profiles on embedding model change (triggered via POST /api/v1/admin/reembed)"
+      ],
+      "interfaces": [
+        {
+          "name": "background-task-queue",
+          "type": "queue"
+        }
+      ],
+      "depends_on": [
+        "vector-embedding-store",
+        "relational-db"
+      ]
+    },
+    {
+      "id": "vector-embedding-store",
+      "name": "Vector Embedding Store (pgvector)",
+      "type": "store",
+      "responsibilities": [
+        "Store skill and behavioral embedding vectors for all developer and project profiles in pgvector-typed columns (VECTOR(1536))",
+        "Provide ANN search via HNSW index with cosine distance operator (<=>): SELECT developer_id, embedding <=> $1 AS distance FROM developer_embeddings WHERE embedding_type = 'behavioral' ORDER BY distance LIMIT $2",
+        "Support exact DELETE by developer_id or project_id for GDPR cascade within PostgreSQL transaction",
+        "Maintain HNSW index parameters: m=16, ef_construction=64 (optimized for 10K–100K vector range with <10ms query latency)",
+        "Co-located within the same PostgreSQL instance as relational-db to enable single-transaction GDPR cascade operations",
+        "Rebuild HNSW index offline (REINDEX CONCURRENTLY) when embedding model is upgraded to new dimensionality"
+      ],
+      "interfaces": [
+        {
+          "name": "pgvector-sql-sdk",
+          "type": "sdk"
+        }
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "relational-db",
+      "name": "Relational Database (PostgreSQL 15)",
+      "type": "store",
+      "responsibilities": [
+        "Persist all structured entities: UserAccount, DeveloperProfile, ProjectProfile, MatchRecord, FeedbackRecord, AllocationRecord, PromptVersion, WeightConfig, ExplanationCache, ErasureAuditLog",
+        "Enforce foreign key constraints: MatchRecord.developer_id -> DeveloperProfile.id (ON DELETE CASCADE), MatchRecord.project_id -> ProjectProfile.id (ON DELETE CASCADE), FeedbackRecord.match_id -> MatchRecord.id (ON DELETE CASCADE)",
+        "Execute Alembic migrations on startup: manage schema evolution across environments without manual SQL",
+        "Serve synthetic seed data via Alembic data migration: >= 50 DeveloperProfile rows and >= 20 ProjectProfile rows with realistic field values for CI and development",
+        "Support horizontal read scaling via read replicas for Phase 2 (write to primary, read from replica for GET /developers, GET /projects, GET risk endpoints)",
+        "Store WeightConfig as a single-row configuration table with versioning; PUT /api/v1/config/weights performs an upsert with updated_at timestamp",
+        "Enable pgvector extension (CREATE EXTENSION IF NOT EXISTS vector) in the first Alembic migration"
+      ],
+      "interfaces": [
+        {
+          "name": "postgres-asyncpg-sdk",
+          "type": "sdk"
+        }
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "react-frontend",
+      "name": "React Frontend (Developer and Manager Dashboards)",
+      "type": "service",
+      "responsibilities": [
+        "Render Developer Dashboard: display ranked list of recommended project cards for the authenticated developer; each card shows project name, match_score (formatted as percentage), LLM-generated explanation string, risk tags, and growth potential bullets",
+        "Render Manager Dashboard: display team composition health panel with per-developer risk badges (bench_risk, burnout_risk) derived from GET /api/v1/developers/{id}/risk; exclude raw behavioral vectors, work_style arrays, and motivation scalar values from all rendered output",
+        "Implement JWT auth flow: POST /api/v1/auth/login on form submit, store access_token in memory (not localStorage), store refresh_token in HttpOnly cookie, refresh access token on 401 responses",
+        "Call backend REST API endpoints as defined in artifacts/api-contracts.json; handle explanation_source='stub_pending' by displaying a loading indicator and polling GET /api/v1/matches/{match_id}/explanation",
+        "Submit match feedback (accept/reject) via POST /api/v1/matches/feedback on developer interaction with recommendation cards",
+        "Build with Vite + React 18 + TypeScript; serve static build artifacts from /frontend/dist via FastAPI StaticFiles mount in development or a CDN in production"
+      ],
+      "interfaces": [
+        {
+          "name": "browser-http-client",
+          "type": "http",
+          "ref": "artifacts/api-contracts.json"
+        }
+      ],
+      "depends_on": [
+        "api-gateway"
+      ]
+    }
+  ],
+  "runtime": {
+    "language": "Python",
+    "runtime_version": "3.11",
+    "framework": "FastAPI 0.111 + Uvicorn 0.29 (backend); React 18 + TypeScript + Vite 5 (frontend)",
+    "build_command": "pip install -r requirements.txt && alembic upgrade head && cd frontend && npm install && npm run build",
+    "start_command": "uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 4"
+  },
+  "persistence": {
+    "type": "postgres",
+    "migrations": true,
+    "schema_ref": "artifacts/data-model.json"
+  },
+  "failure_modes": [
+    {
+      "scenario": "LLM API timeout or rate-limit error during async explanation generation",
+      "mitigation": "Explanation service retries with exponential backoff (3 attempts: 1s, 2s, 4s). Match response always returns a synchronous stub explanation within 500ms per ADR-003; the LLM call happens after the response is returned. After all retries exhausted, the stub remains as the final explanation and explanation_source is set to 'stub_permanent'. Alert is logged to ErasureAuditLog-equivalent monitoring table. No user-facing error occurs."
+    },
+    {
+      "scenario": "LLM API rate limit (HTTP 429) under burst load",
+      "mitigation": "Explanation requests are serialized through an in-process async queue with configurable concurrency limit (default: 5 concurrent LLM calls). When queue depth exceeds 50, new explanation tasks are deferred and the stub is returned permanently for low-priority matches. Rate limit metrics are exposed via GET /api/v1/health?verbose=true for operational monitoring."
+    },
+    {
+      "scenario": "pgvector ANN search query exceeds 150ms timeout",
+      "mitigation": "Matching engine wraps each vector query with a 150ms asyncio timeout. On timeout, falls back to keyword-based Jaccard skill matching for ranking (workstyle_score and motivation_score default to 0.5 neutral value). The fallback is logged and the match response includes a flag 'vector_search_degraded: true'. Alert fires if fallback rate exceeds 1% over a 5-minute window."
+    },
+    {
+      "scenario": "PostgreSQL primary connection pool exhausted under high concurrency",
+      "mitigation": "asyncpg connection pool is configured with max_size=20, min_size=5, command_timeout=30s. Requests that cannot acquire a connection within 5s receive HTTP 503 with Retry-After: 2 header. Pool size is tunable via environment variable DB_POOL_MAX_SIZE without code change. Phase 2 production deployment adds PgBouncer in transaction-pooling mode."
+    },
+    {
+      "scenario": "Weight misconfiguration: weights submitted that do not sum to 1.0 or contain negative values",
+      "mitigation": "PUT /api/v1/config/weights validates: all wi >= 0.0, |sum(w1..w5) - 1.0| < 0.001. Returns HTTP 400 with error detail listing the invalid weights. Previous weight configuration is preserved unchanged. Unit test in test_weight_config.py verifies rejection of invalid payloads."
+    },
+    {
+      "scenario": "GDPR cascade erasure partial failure (e.g., pgvector DELETE fails mid-transaction)",
+      "mitigation": "All six deletion operations (profile row, developer_embeddings rows, MatchRecord rows, FeedbackRecord rows, AllocationRecord rows, ExplanationCache rows) are wrapped in a single PostgreSQL SAVEPOINT. On any operation failure, ROLLBACK TO SAVEPOINT restores all data. HTTP 500 is returned with an erasure_request_id. An ErasureAuditLog row is created with status='failed' for compliance auditing and manual remediation. The developer profile remains intact — no partial deletion."
+    },
+    {
+      "scenario": "Embedding generation failure for a new developer profile (embedding model API error or invalid vector format)",
+      "mitigation": "Profile is persisted to relational-db immediately with embedding_status='pending'. The embedding_worker marks status='failed' after 3 retry attempts. The matching engine detects 'failed' or 'pending' status and returns a degraded match response using keyword-only skill scoring (vector dimensions default to 0.5). A badge 'behavioral_data_unavailable' is included in the match response to alert the developer that full behavioral matching is not yet active."
+    },
+    {
+      "scenario": "Stale weight configuration read across multiple API replicas after PUT /api/v1/config/weights",
+      "mitigation": "WeightConfig is always read from the PostgreSQL primary on each match request — no in-process caching. This ensures all replicas see updated weights immediately without cache invalidation logic. The trade-off is one extra DB read per match request (< 5ms). For Phase 2, an optional Redis cache with 60-second TTL and explicit cache-bust on PUT /config/weights can be added."
+    },
+    {
+      "scenario": "Rejection-rate analytics surface misleading statistics with fewer than 10 feedback samples",
+      "mitigation": "The feedback-analytics-service enforces a minimum sample floor: rejection_ratio is returned as null and min_sample_floor_met is returned as false when sample_count < 10. Manager dashboard renders a 'Insufficient data' badge instead of a percentage. The minimum floor of 10 is configurable via REJECTION_RATE_MIN_SAMPLES environment variable without code change."
+    },
+    {
+      "scenario": "Vector search cold-start degrades match quality for early deployments with fewer than 50 profiles",
+      "mitigation": "Alembic data migration seeds >= 50 DeveloperProfile rows and >= 20 ProjectProfile rows with pre-computed embeddings as part of the initial schema migration. This ensures the HNSW index has sufficient vectors for meaningful ANN search from day one. The HNSW index requires a minimum of 1 vector to be created; quality improves monotonically as real profiles are added."
+    },
+    {
+      "scenario": "JWT secret rotation or expiry causes all authenticated sessions to be invalidated simultaneously",
+      "mitigation": "NEURAL_SYNC_JWT_SECRET is loaded from environment variable at startup. Rotation requires a rolling restart of API replicas. Access token TTL=1h minimizes the window of active tokens. In Phase 1, graceful rotation is acceptable (users must re-login after restart). Phase 2 introduces key-id (kid) claim support for zero-downtime secret rotation using multiple valid secrets."
+    }
+  ],
+  "adrs": [
+    {
+      "id": "ADR-001",
+      "title": "Vector Storage Technology Selection",
+      "ref": "artifacts/adr/adr-001-vector-store.json"
+    },
+    {
+      "id": "ADR-002",
+      "title": "Authentication Model for MVP Dashboard Access",
+      "ref": "artifacts/adr/adr-002-auth-model.json"
+    },
+    {
+      "id": "ADR-003",
+      "title": "Latency SLA Scope: Whether 500ms p95 Includes the LLM API Call",
+      "ref": "artifacts/adr/adr-003-latency-sla.json"
+    },
+    {
+      "id": "ADR-004",
+      "title": "LLM Provider & Model Selection for the Explanation Layer",
+      "ref": "artifacts/adr/adr-004-claude-model.json"
+    }
+  ],
+  "api_contracts_ref": "artifacts/api-contracts.json",
+  "data_model_ref": "artifacts/data-model.json"
+}

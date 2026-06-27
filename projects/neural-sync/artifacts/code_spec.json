@@ -1,0 +1,98 @@
+{
+  "spec_version": "v1",
+  "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
+  "task_id": "T-05-FRONTEND",
+  "title": "Frontend Implementation (React Developer & Manager Dashboards)",
+  "files_affected": [
+    {
+      "path": "frontend/package.json",
+      "change_type": "created",
+      "description": "Vite 5 + React 18 + TypeScript 5.4 project manifest. Build command: tsc && vite build. Dependencies: react 18, react-dom 18. DevDependencies: @vitejs/plugin-react, @types/react, @types/react-dom, typescript, vite."
+    },
+    {
+      "path": "frontend/vite.config.ts",
+      "change_type": "created",
+      "description": "Vite build configuration with @vitejs/plugin-react plugin and a dev-server proxy for /api/* → http://localhost:8000 to avoid CORS during development."
+    },
+    {
+      "path": "frontend/tsconfig.json",
+      "change_type": "created",
+      "description": "TypeScript compiler configuration. Target ES2020, lib: [ES2020, DOM, DOM.Iterable], jsx: react-jsx (automatic JSX transform — no React import required in every file), moduleResolution: bundler, strict: true, noEmit: true (Vite handles bundling)."
+    },
+    {
+      "path": "frontend/tsconfig.node.json",
+      "change_type": "created",
+      "description": "Secondary TypeScript config for vite.config.ts; composite: true so tsconfig.json can reference it."
+    },
+    {
+      "path": "frontend/index.html",
+      "change_type": "created",
+      "description": "Vite entry HTML. Mounts the React app at <div id='root'>. Single-page application entry point."
+    },
+    {
+      "path": "frontend/src/vite-env.d.ts",
+      "change_type": "created",
+      "description": "Vite client type reference (/// <reference types='vite/client' />) plus ImportMetaEnv augmentation for VITE_API_BASE_URL. Resolves import.meta.env typing before npm install."
+    },
+    {
+      "path": "frontend/src/main.tsx",
+      "change_type": "created",
+      "description": "React 18 entry point. Creates root via ReactDOM.createRoot and mounts <App /> in StrictMode."
+    },
+    {
+      "path": "frontend/src/App.tsx",
+      "change_type": "created",
+      "description": "Top-level component. Renders a login form (POST /auth/login) that stores access_token in module memory (ADR-002). After login, routes to DeveloperDashboard (role=developer) or team-selector + ManagerDashboard (role=manager). Sign-out clears the in-memory token."
+    },
+    {
+      "path": "frontend/src/api/client.ts",
+      "change_type": "created",
+      "description": "Typed REST API client matching artifacts/api-contracts.json. JWT access_token stored in module-level variable (_accessToken) — never in localStorage or sessionStorage (ADR-002). HttpOnly refresh_token cookie sent via credentials:'include'. On HTTP 401: silently calls POST /auth/refresh once, then retries the original request. Exports: login(), refreshToken(), getDeveloperMatches(), getMatchExplanation(), submitFeedback(), getDeveloperRisk(), getTeamRiskSummary(). All request/response types mirror the OpenAPI 3.1 schemas. ApiClientError class carries HTTP status + error envelope. No raw behavioral vector fields (work_style, motivation_vector) are present in any exported type."
+    },
+    {
+      "path": "frontend/src/components/RiskBadge.tsx",
+      "change_type": "created",
+      "description": "RiskBadge component (AC8). Props: type ('burnout'|'bench'), level ('low'|'medium'|'high'), optional score (0.0-1.0 numeric). Renders a colour-coded pill with label, severity level, and optional percentage. Color scheme: green=low, amber=medium, red=high. data-testid='risk-badge-{type}-{level}'. Strict AC8 compliance: never renders work_style arrays, motivation_vector values, or raw behavioral dimension data."
+    },
+    {
+      "path": "frontend/src/components/ProjectCard.tsx",
+      "change_type": "created",
+      "description": "ProjectCard component (AC7). Displays: project_id, match_score as percentage, Claude explanation string (≥50 chars), risks[] list, growth_potential[] chip list, vector_search_degraded / behavioral_data_unavailable status flags, Accept/Reject feedback buttons (POST /matches/feedback). When explanation_source='stub_pending', polls GET /matches/{match_id}/explanation every 3 s and shows a loading indicator until explanation_source transitions to a final value. data-testid attributes on score ('match-score'), explanation ('match-explanation'), buttons ('accept-button','reject-button'), and submitted state ('feedback-submitted'). AC8 compliant: component_scores and weights_snapshot are not rendered in the UI."
+    },
+    {
+      "path": "frontend/src/pages/DeveloperDashboard.tsx",
+      "change_type": "created",
+      "description": "DeveloperDashboard page (AC7). Fetches GET /developers/{developer_id}/matches?top_k=10 on mount. Renders a vertical list of ProjectCard components for each MatchRecord. Empty-state message when matches=0. Loading/error states. data-testid='developer-dashboard'. Does not render any raw behavioral vectors, motivation scalars, or work_style arrays — those fields are excluded from the MatchRecord API response."
+    },
+    {
+      "path": "frontend/src/pages/ManagerDashboard.tsx",
+      "change_type": "created",
+      "description": "ManagerDashboard page (AC8). Fetches GET /teams/{team_id}/risk-summary on mount. Renders: (1) team health score circle (derived from high-risk member count), (2) six MetricCard tiles for burnout/bench distribution counts (high/medium/low), (3) per-developer table with RiskBadge for each member. AC8 compliance: only developer_id, *_risk_badge, and *_risk_score are read from the API payload and rendered. work_style, motivation_vector, component_scores, and all other behavioral fields are structurally absent from TeamRiskSummary/TeamRiskMember types and are never rendered."
+    }
+  ],
+  "implementation_notes": "Build verified: tsc && vite build exits 0, 36 modules transformed, 160 kB JS bundle. TypeScript strict mode (strict:true) enabled — all type checks pass clean. JWT auth per ADR-002: access_token held in module-level memory variable; refresh_token in HttpOnly cookie. Explanation polling: ProjectCard polls GET /matches/{match_id}/explanation every 3 s via window.setInterval while explanation_source==='stub_pending'; polling stops when source transitions to claude_cached, claude_async, or stub_permanent. AC8 guard layers: (a) API type definitions exclude work_style/motivation_vector fields entirely; (b) ManagerDashboard component only maps developer_id, *_risk_badge, *_risk_score from TeamRiskMember — no other fields are accessed or rendered. No raw behavioral data can appear in the UI by construction. VITE_API_BASE_URL env var overrides the default http://localhost:8000/api/v1 base URL at build time. Dev proxy: /api → http://localhost:8000 in vite.config.ts avoids CORS during development without needing a backend CORS header change.",
+  "contracts_satisfied": [
+    "POST /api/v1/auth/login — LoginRequest body, LoginResponse (access_token, role, user_id); token stored in memory per ADR-002",
+    "POST /api/v1/auth/refresh — silent refresh on 401, rotated HttpOnly cookie handled automatically",
+    "GET /api/v1/developers/{developer_id}/matches — DeveloperMatchesResponse consumed by DeveloperDashboard; renders match_score + explanation per AC7",
+    "GET /api/v1/matches/{match_id}/explanation — ExplanationResponse polled by ProjectCard while explanation_source=stub_pending per architecture spec",
+    "POST /api/v1/matches/feedback — FeedbackRequest submitted on Accept/Reject button click in ProjectCard per AC10",
+    "GET /api/v1/teams/{team_id}/risk-summary — TeamRiskSummary consumed by ManagerDashboard; only risk badges and distribution counts rendered per AC8",
+    "Manager dashboard renders NO raw work_style vectors, motivation_vector values, or behavioral dimension data [AC8]"
+  ],
+  "test_refs": [
+    "tests/integration/test_full_pipeline.py — Developer dashboard: renders ≥1 ProjectCard with match_score and explanation for developer with complete profile [AC7]",
+    "tests/integration/test_full_pipeline.py — Manager dashboard: risk badges (burnout/bench) render; raw behavioral vectors and motivation scalars absent from rendered output [AC8]",
+    "frontend/src/components/ProjectCard.tsx — data-testid='project-card','match-score','match-explanation','explanation-loading','accept-button','reject-button','feedback-submitted' enable component-level test assertions",
+    "frontend/src/components/RiskBadge.tsx — data-testid='risk-badge-{type}-{level}' enables risk badge assertions in manager dashboard tests",
+    "frontend/src/pages/DeveloperDashboard.tsx — data-testid='developer-dashboard','recommendations-list','no-recommendations' for page-level test assertions",
+    "frontend/src/pages/ManagerDashboard.tsx — data-testid='manager-dashboard','team-health-metrics','developer-risk-table','member-row-{id}' for manager dashboard test assertions"
+  ],
+  "known_limitations": [
+    "No client-side routing library (react-router-dom) is included; role-based navigation is handled by conditional rendering in App.tsx. Adding browser history navigation would require adding react-router-dom to dependencies.",
+    "Explanation polling interval is fixed at 3 seconds; a production implementation might use exponential back-off or WebSocket push from the backend.",
+    "The logout flow clears the in-memory access_token but does not explicitly invalidate the HttpOnly refresh_token cookie on the server; the cookie will expire after its 7-day TTL.",
+    "Manager must manually enter a team UUID in the TeamSelector; a production implementation would fetch the manager's teams from a GET /teams endpoint (not yet defined in api-contracts.json).",
+    "No offline / service-worker support — the frontend requires a live backend connection."
+  ]
+}

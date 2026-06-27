@@ -1,0 +1,50 @@
+{
+  "id": "ADR-003",
+  "title": "Latency SLA Scope: Whether 500ms p95 Includes the LLM API Call",
+  "status": "accepted",
+  "context": "The requirements state two conflicting signals: (1) Acceptance Criterion 1 requires POST /api/v1/matches to return match_score, explanation (≥50 chars), risks, and growth_potential within 500ms at p95 under nominal load. (2) The risks section explicitly recommends 'return algorithmic score synchronously and generate explanation asynchronously with caching for repeated profile pairs' as the mitigation for LLM API latency. (3) The open question asks whether 500ms includes the LLM API call or only the algorithmic scoring step. LLM response latency under standard conditions is typically 800ms–4000ms for a structured explanation prompt, making a 500ms p95 SLA for a synchronous end-to-end call infeasible without pre-warming or speculative execution that would add significant architectural complexity. This ADR resolves the scope formally to unblock DB schema design, API contract definition, and backend implementation.",
+  "options_considered": [
+    {
+      "name": "500ms end-to-end including the synchronous LLM API call",
+      "pros": [
+        "Simplest API contract: single POST /api/v1/matches always returns a fully populated response",
+        "No client-side polling logic or two-phase response handling required"
+      ],
+      "cons": [
+        "Infeasible under nominal load: LLM API p50 latency is ~1200ms for a 200-token explanation; p95 would far exceed 500ms",
+        "Forces speculative pre-computation or aggressive pre-caching before any match request is received, requiring background re-scoring jobs and complex cache invalidation",
+        "Any LLM API slowdown (rate limit, model update) would cause SLA breach with no fallback path",
+        "Violates the risk mitigation strategy already documented in requirements.json"
+      ]
+    },
+    {
+      "name": "500ms for algorithmic scoring only; full explanation delivered asynchronously via polling endpoint",
+      "pros": [
+        "Achievable: algorithmic scoring (weight application, vector query, score computation) completes in <50ms under normal load",
+        "Decouples NEURAL SYNC latency from LLM API variability",
+        "Allows explanation caching to amortize LLM cost across repeated profile-pair queries"
+      ],
+      "cons": [
+        "Clients must poll GET /api/v1/matches/{match_id}/explanation for the full explanation",
+        "Initial POST /api/v1/matches response contains a stub explanation field, not the final LLM output",
+        "Requires an explanation_status field in the response to signal async generation state"
+      ]
+    },
+    {
+      "name": "500ms for algorithmic scoring + stub; full explanation via cache-or-async hybrid",
+      "pros": [
+        "Best UX balance: cache hits (same developer+project pair seen before) return full explanation within 500ms; cache misses return a non-empty algorithmic stub immediately with full explanation populated asynchronously",
+        "The stub is deterministically derived from scoring data (skill score, work_style delta, growth signal), ensuring it is always ≥50 chars and always factually accurate even before the LLM responds",
+        "Satisfies AC1 literally: explanation field is always non-empty and ≥50 chars in the synchronous response",
+        "Consistent API surface: POST always returns a complete response object; no polling required; full explanation overwrites stub silently in the match record"
+      ],
+      "cons": [
+        "Stub explanation must be carefully templated to include the minimum required statements (skill alignment, behavioral alignment, growth/career potential) to avoid failing the explanation structure regression test",
+        "Cache key must include developer profile hash + project profile hash + weights snapshot hash to avoid serving stale explanations after weight changes"
+      ]
+    }
+  ],
+  "decision": "The 500ms p95 SLA applies to the synchronous POST /api/v1/matches response, which MUST return within 500ms a complete response body including: match_score (float 0.0–1.0), explanation (non-empty string ≥50 chars, either a cached full LLM explanation or a deterministic algorithmic stub), risks (list), and growth_potential (list). The explanation field is populated from the explanation cache if a prior match for the same (developer_profile_hash, project_profile_hash, weights_hash) tuple exists; on a cache miss, a deterministic stub explanation is generated synchronously in <10ms from the scoring data and returned in the 500ms window while a background task enqueues the LLM explanation request. The full LLM explanation is written to the match record and cache asynchronously. Clients may retrieve the updated explanation via GET /api/v1/matches/{match_id} on subsequent calls. The 500ms budget is allocated as: DB profile read ≤20ms, vector similarity query ≤30ms, five-dimension scoring ≤5ms, stub/cache explanation ≤10ms, serialization ≤5ms, overhead ≤10ms = 80ms total, well within 500ms. The LLM API call is explicitly outside the synchronous SLA.",
+  "consequences": "The MatchRecord schema includes explanation_source ENUM('claude_cached', 'stub_pending', 'claude_async') and explanation_updated_at timestamp so that clients and tests can distinguish between stub and full LLM explanations. (The enum literal values are retained as code symbols for backward compatibility; they denote cached vs async LLM explanations regardless of provider.) The stub template must always produce a string covering skill alignment, behavioral alignment, and growth potential (three mandatory sentence components) to pass the explanation structure regression test (AC3) even before the LLM responds. The explanation cache is keyed on a composite hash of developer profile fields, project profile fields, and the current weight vector; cache invalidation is triggered on PUT /api/v1/config/weights. Latency tests in the QA suite measure only the synchronous POST /api/v1/matches round-trip against a local environment with a mock LLM API (or a real LLM with cache pre-warmed) to reliably validate the 500ms target.",
+  "created_at": "2026-06-26T00:00:00Z"
+}

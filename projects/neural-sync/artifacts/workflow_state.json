@@ -1,0 +1,265 @@
+{
+  "spec_version": "v1",
+  "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
+  "current_stage": "failed",
+  "stages": {
+    "requirement_ingestion": {
+      "status": "success",
+      "attempt": 0,
+      "agent": "product-agent",
+      "started_at": "2026-06-26T18:12:19Z",
+      "completed_at": "2026-06-26T18:16:22Z",
+      "artifact_refs": [
+        "artifacts/requirements.json",
+        "artifacts/requirements.md"
+      ]
+    },
+    "task_decomposition": {
+      "status": "success",
+      "attempt": 0,
+      "agent": "planner-agent",
+      "started_at": "2026-06-26T18:16:22Z",
+      "completed_at": "2026-06-26T18:21:57Z",
+      "artifact_refs": [
+        "artifacts/workplan.json"
+      ]
+    },
+    "planning_architecture": {
+      "status": "success",
+      "attempt": 0,
+      "agent": "architect-agent",
+      "started_at": "2026-06-26T18:30:55Z",
+      "completed_at": "2026-06-26T18:43:52Z",
+      "artifact_refs": [
+        "artifacts/data-model.json"
+      ]
+    },
+    "code_generation": {
+      "status": "success",
+      "attempt": 0,
+      "agent": "developer-agent",
+      "started_at": "2026-06-26T19:24:01Z",
+      "completed_at": "2026-06-26T19:36:05Z",
+      "artifact_refs": [
+        "frontend/src/pages/DeveloperDashboard.tsx",
+        "frontend/src/pages/ManagerDashboard.tsx",
+        "frontend/src/components/ProjectCard.tsx",
+        "frontend/src/components/RiskBadge.tsx",
+        "frontend/src/api/client.ts",
+        "frontend/package.json"
+      ]
+    },
+    "code_review": {
+      "status": "success",
+      "attempt": 0,
+      "agent": "reviewer-agent",
+      "started_at": "2026-06-26T23:04:04Z",
+      "completed_at": "2026-06-26T23:09:43Z",
+      "artifact_refs": [
+        "artifacts/review_report.json"
+      ],
+      "blocking_issues": [
+        "security baseline: tests/test_auth.py: possible hard-coded secret"
+      ]
+    },
+    "testing_validation": {
+      "status": "success",
+      "attempt": 1,
+      "agent": "qa-agent",
+      "started_at": "2026-06-26T20:06:05Z",
+      "completed_at": "2026-06-26T20:12:47Z",
+      "artifact_refs": [
+        "artifacts/test_plan.json",
+        "tests/test_matching_engine.py",
+        "tests/test_risk_engine.py",
+        "tests/test_gdpr_erasure.py",
+        "tests/test_feedback_analytics.py",
+        "tests/test_weight_config.py",
+        "tests/integration/test_full_pipeline.py"
+      ]
+    },
+    "deployment": {
+      "status": "blocked",
+      "attempt": 0,
+      "agent": "devops-agent",
+      "started_at": "2026-06-26T23:09:43Z",
+      "blocking_issues": [
+        "deploy gate: review verdict is 'rejected'"
+      ]
+    }
+  },
+  "tasks": {
+    "STAGE-REQUIREMENTS": {
+      "status": "success",
+      "attempt": 0,
+      "owner_agent": "product-agent",
+      "stage": "requirement_ingestion",
+      "depends_on": [],
+      "started_at": "2026-06-26T18:12:19Z",
+      "completed_at": "2026-06-26T18:16:22Z",
+      "artifact_refs": [
+        "artifacts/requirements.json",
+        "artifacts/requirements.md"
+      ]
+    },
+    "STAGE-PLAN": {
+      "status": "success",
+      "attempt": 0,
+      "owner_agent": "planner-agent",
+      "stage": "task_decomposition",
+      "depends_on": [
+        "STAGE-REQUIREMENTS"
+      ],
+      "started_at": "2026-06-26T18:16:22Z",
+      "completed_at": "2026-06-26T18:21:57Z",
+      "artifact_refs": [
+        "artifacts/workplan.json"
+      ]
+    },
+    "T-01-ARCHITECTURE": {
+      "status": "success",
+      "attempt": 0,
+      "owner_agent": "architect-agent",
+      "stage": "planning_architecture",
+      "depends_on": [],
+      "started_at": "2026-06-26T18:21:57Z",
+      "completed_at": "2026-06-26T18:30:55Z",
+      "artifact_refs": [
+        "artifacts/architecture.json",
+        "artifacts/adr/adr-001-vector-store.json",
+        "artifacts/adr/adr-002-auth-model.json",
+        "artifacts/adr/adr-003-latency-sla.json",
+        "artifacts/adr/adr-004-claude-model.json"
+      ]
+    },
+    "T-02-API-CONTRACTS": {
+      "status": "success",
+      "attempt": 0,
+      "owner_agent": "architect-agent",
+      "stage": "planning_architecture",
+      "depends_on": [
+        "T-01-ARCHITECTURE"
+      ],
+      "started_at": "2026-06-26T18:30:55Z",
+      "completed_at": "2026-06-26T18:42:56Z",
+      "artifact_refs": [
+        "artifacts/api-contracts.json"
+      ]
+    },
+    "T-03-DATA-MODEL": {
+      "status": "success",
+      "attempt": 0,
+      "owner_agent": "architect-agent",
+      "stage": "planning_architecture",
+      "depends_on": [
+        "T-01-ARCHITECTURE"
+      ],
+      "started_at": "2026-06-26T18:30:55Z",
+      "completed_at": "2026-06-26T18:43:52Z",
+      "artifact_refs": [
+        "artifacts/data-model.json"
+      ]
+    },
+    "T-04-BACKEND": {
+      "status": "success",
+      "attempt": 1,
+      "owner_agent": "developer-agent",
+      "stage": "code_generation",
+      "depends_on": [
+        "T-02-API-CONTRACTS",
+        "T-03-DATA-MODEL"
+      ],
+      "started_at": "2026-06-26T19:13:52Z",
+      "completed_at": "2026-06-26T19:24:01Z",
+      "artifact_refs": [
+        "artifacts/code_spec.json",
+        "artifacts/prompts/match_explanation_v1.json",
+        "src/api/matches.py",
+        "src/api/developers.py",
+        "src/api/projects.py",
+        "src/api/config.py",
+        "src/api/feedback.py",
+        "src/api/analytics.py",
+        "src/engine/matching.py",
+        "src/engine/risk.py",
+        "src/engine/embeddings.py",
+        "src/services/claude_service.py",
+        "src/db/models.py",
+        "src/db/migrations/"
+      ]
+    },
+    "T-05-FRONTEND": {
+      "status": "success",
+      "attempt": 0,
+      "owner_agent": "developer-agent",
+      "stage": "code_generation",
+      "depends_on": [
+        "T-04-BACKEND"
+      ],
+      "started_at": "2026-06-26T19:24:01Z",
+      "completed_at": "2026-06-26T19:36:05Z",
+      "artifact_refs": [
+        "frontend/src/pages/DeveloperDashboard.tsx",
+        "frontend/src/pages/ManagerDashboard.tsx",
+        "frontend/src/components/ProjectCard.tsx",
+        "frontend/src/components/RiskBadge.tsx",
+        "frontend/src/api/client.ts",
+        "frontend/package.json"
+      ]
+    },
+    "T-06-REVIEW": {
+      "status": "success",
+      "attempt": 0,
+      "owner_agent": "reviewer-agent",
+      "stage": "code_review",
+      "depends_on": [
+        "T-04-BACKEND",
+        "T-05-FRONTEND"
+      ],
+      "started_at": "2026-06-26T23:04:04Z",
+      "completed_at": "2026-06-26T23:09:43Z",
+      "artifact_refs": [
+        "artifacts/review_report.json"
+      ]
+    },
+    "T-07-QA": {
+      "status": "success",
+      "attempt": 1,
+      "owner_agent": "qa-agent",
+      "stage": "testing_validation",
+      "depends_on": [
+        "T-04-BACKEND",
+        "T-05-FRONTEND"
+      ],
+      "started_at": "2026-06-26T20:06:05Z",
+      "completed_at": "2026-06-26T20:12:47Z",
+      "artifact_refs": [
+        "artifacts/test_plan.json",
+        "tests/test_matching_engine.py",
+        "tests/test_risk_engine.py",
+        "tests/test_gdpr_erasure.py",
+        "tests/test_feedback_analytics.py",
+        "tests/test_weight_config.py",
+        "tests/integration/test_full_pipeline.py"
+      ]
+    },
+    "T-08-DEPLOY": {
+      "status": "blocked",
+      "attempt": 0,
+      "owner_agent": "devops-agent",
+      "stage": "deployment",
+      "depends_on": [
+        "T-06-REVIEW",
+        "T-07-QA"
+      ],
+      "started_at": "2026-06-26T23:09:43Z",
+      "blocking_issues": [
+        "deploy gate: review verdict is 'rejected'"
+      ]
+    }
+  },
+  "halted": true,
+  "max_retries": 3,
+  "created_at": "2026-06-26T18:12:19Z",
+  "updated_at": "2026-06-26T23:11:09Z"
+}

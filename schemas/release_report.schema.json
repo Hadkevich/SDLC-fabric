@@ -1,0 +1,43 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ReleaseReport",
+    "type": "object",
+    "required": ["spec_version", "workflow_id", "environment", "artifact_ref", "health_checks", "verdict", "deployed_at"],
+    "additionalProperties": false,
+    "properties": {
+        "spec_version": { "type": "string", "const": "v1" },
+        "workflow_id": { "type": "string" },
+        "environment": {
+            "type": "string",
+            "enum": ["local", "staging", "production"]
+        },
+        "artifact_ref": { "type": "string" },
+        "deploy_command": { "type": "string" },
+        "health_checks": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["name", "status"],
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string" },
+                    "endpoint": { "type": "string" },
+                    "expected": { "type": "string" },
+                    "actual": { "type": "string" },
+                    "status": {
+                        "type": "string",
+                        "enum": ["pass", "fail"]
+                    }
+                }
+            }
+        },
+        "rollback_available": { "type": "boolean" },
+        "verdict": {
+            "type": "string",
+            "enum": ["success", "partial", "failed", "rolled_back"]
+        },
+        "notes": { "type": "string" },
+        "deployed_at": { "type": "string", "format": "date-time" }
+    }
+}

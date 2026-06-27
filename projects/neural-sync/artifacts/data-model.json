@@ -1,0 +1,1787 @@
+{
+  "spec_version": "v1",
+  "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
+  "generated_at": "2026-06-26T00:00:00Z",
+  "database": {
+    "engine": "PostgreSQL",
+    "version": "15",
+    "extensions": [
+      {
+        "name": "pgvector",
+        "min_version": "0.5.0",
+        "install_sql": "CREATE EXTENSION IF NOT EXISTS vector;",
+        "purpose": "VECTOR(1536) column type; HNSW index for sub-150ms cosine ANN similarity search across developer and project embeddings"
+      },
+      {
+        "name": "uuid-ossp",
+        "install_sql": "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";",
+        "purpose": "gen_random_uuid() default for all primary key columns"
+      }
+    ],
+    "migration_tool": "Alembic",
+    "migration_notes": "pgvector extension must be enabled in the first Alembic migration before any VECTOR column is created. Both relational and vector tables are managed under the same Alembic revision history. Initial data migration seeds >= 50 DeveloperProfile rows and >= 20 ProjectProfile rows with pre-computed embeddings."
+  },
+  "entities": [
+    {
+      "name": "UserAccount",
+      "table_name": "user_accounts",
+      "description": "Authentication credentials and role assignment for all system users. Developer-role accounts are linked 1:1 to a DeveloperProfile. Manager-role accounts are not linked to a DeveloperProfile. Passwords stored as bcrypt hash. JWT claims are derived from this entity (sub=id, role=role).",
+      "fields": [
+        {
+          "name": "id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default": "gen_random_uuid()",
+          "description": "Surrogate primary key. Used as JWT 'sub' claim."
+        },
+        {
+          "name": "username",
+          "type": "VARCHAR(100)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": true,
+          "description": "Login identifier. Case-insensitive. Used in POST /api/v1/auth/login."
+        },
+        {
+          "name": "email",
+          "type": "VARCHAR(255)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": true,
+          "description": "User email address (PII). Never returned in match or analytics API responses."
+        },
+        {
+          "name": "hashed_password",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "bcrypt-hashed password (work factor >= 12). Never exposed in any API response."
+        },
+        {
+          "name": "role",
+          "type": "VARCHAR(20)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "role IN ('developer', 'manager')",
+          "description": "JWT role claim. 'developer': can read own profile and recommendations only. 'manager': can read team-level data and risk summaries (no raw behavioral vectors)."
+        },
+        {
+          "name": "is_active",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "TRUE",
+          "description": "Soft-disable flag. Inactive users are rejected at JWT issuance."
+        },
+        {
+          "name": "developer_profile_id",
+          "type": "UUID",
+          "nullable": true,
+          "primary_key": false,
+          "unique": true,
+          "foreign_key": {
+            "references_table": "developer_profiles",
+            "references_field": "id",
+            "on_delete": "SET NULL"
+          },
+          "description": "FK to DeveloperProfile. NULL for manager-role accounts. SET NULL on DeveloperProfile deletion (step 1 of GDPR cascade); then the UserAccount row is explicitly deleted in step 7."
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_user_accounts_email",
+          "fields": ["email"],
+          "unique": true
+        },
+        {
+          "name": "idx_user_accounts_username",
+          "fields": ["username"],
+          "unique": true
+        },
+        {
+          "name": "idx_user_accounts_developer_profile_id",
+          "fields": ["developer_profile_id"],
+          "unique": true,
+          "description": "Fast reverse-lookup of UserAccount by developer_profile_id during GDPR cascade step 7."
+        }
+      ],
+      "gdpr_erasure": {
+        "contains_pii": true,
+        "pii_fields": ["username", "email", "hashed_password"],
+        "action": "DELETE",
+        "cascade_step": 7,
+        "trigger": "Explicit DELETE WHERE id = (SELECT id FROM user_accounts WHERE developer_profile_id = $developer_id); executed inside the GDPR erasure transaction after DeveloperProfile deletion in step 1 sets developer_profile_id to NULL.",
+        "notes": "UserAccount is deleted last in the cascade. The developer_profile_id FK is SET NULL when DeveloperProfile is deleted; the UserAccount row is then explicitly deleted in step 7. Manager-role accounts are never touched by developer GDPR erasure."
+      }
+    },
+    {
+      "name": "DeveloperProfile",
+      "table_name": "developer_profiles",
+      "description": "Core PII entity capturing all structured developer attributes used by the five-dimension matching engine. All fields in this entity are required per the requirements scope. Deletion of this row is the root trigger of the full GDPR erasure cascade.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default": "gen_random_uuid()",
+          "description": "Public developer identifier used in all API routes (GET /api/v1/developers/{id}, DELETE /api/v1/developers/{id}, etc.)."
+        },
+        {
+          "name": "user_id",
+          "type": "UUID",
+          "nullable": true,
+          "primary_key": false,
+          "unique": true,
+          "foreign_key": {
+            "references_table": "user_accounts",
+            "references_field": "id",
+            "on_delete": "SET NULL"
+          },
+          "description": "Linked UserAccount for dashboard login. NULL for system-ingested profiles that have no login account."
+        },
+        {
+          "name": "skills",
+          "type": "JSONB",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "jsonb_typeof(skills) = 'array'",
+          "description": "Ordered list of skill identifier strings (e.g., [\"Python\", \"FastAPI\", \"PostgreSQL\", \"Docker\"]). Used in skill_score Jaccard similarity: |developer.skills ∩ project.required_skills| / |developer.skills ∪ project.required_skills|, weighted by experience_years relevance. Array length >= 1 enforced at application layer."
+        },
+        {
+          "name": "experience_years",
+          "type": "INTEGER",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "experience_years >= 0 AND experience_years <= 60",
+          "description": "Total years of professional software development experience. Modulates skill_score relevance weighting in the matching engine."
+        },
+        {
+          "name": "preferred_stack",
+          "type": "JSONB",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "jsonb_typeof(preferred_stack) = 'array'",
+          "description": "Developer's preferred technology stack as an ordered list of strings (e.g., [\"FastAPI\", \"React\", \"Docker\", \"PostgreSQL\"]). Included alongside skills in the skill embedding generation payload sent to the embedding model."
+        },
+        {
+          "name": "work_style_vector",
+          "type": "JSONB",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "jsonb_array_length(work_style_vector) = 8",
+          "description": "8-dimensional float[0.0, 1.0] behavioral vector capturing work style traits. Dimension semantics example: [collaboration_preference, structured_vs_flexible, async_vs_sync, deep_focus_vs_context_switching, mentorship_orientation, pace_preference, autonomy_preference, feedback_receptiveness]. Used to compute workstyle_score via cosine similarity with project behavioral embedding. MUST NEVER be exposed in any API response or passed raw to LLM prompts."
+        },
+        {
+          "name": "motivation_vector",
+          "type": "JSONB",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "jsonb_array_length(motivation_vector) = 8",
+          "description": "8-dimensional float[0.0, 1.0] motivation vector. Dimension semantics example: [technical_challenge, innovation_drive, mentorship_value, career_advancement, work_life_balance, financial_reward, social_impact, recognition]. Used to compute motivation_score via cosine similarity with project motivation embedding. MUST NEVER be exposed in any API response or passed raw to LLM prompts."
+        },
+        {
+          "name": "timezone",
+          "type": "VARCHAR(64)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "IANA timezone string (e.g., 'America/New_York', 'Europe/London', 'Asia/Tokyo'). Used in timezone_score computation via a timezone distance matrix comparing overlap with project.timezone_overlap_required."
+        },
+        {
+          "name": "availability_hours",
+          "type": "INTEGER",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "availability_hours >= 0 AND availability_hours <= 168",
+          "description": "Developer's available hours per week (0–168). Used in workload compatibility checks and burnout-risk computation when compared against AllocationRecord.workload_intensity."
+        },
+        {
+          "name": "career_goals",
+          "type": "JSONB",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "jsonb_typeof(career_goals) = 'array'",
+          "description": "Ordered list of career goal strings (e.g., [\"Lead architecture decisions\", \"Deepen ML expertise\", \"Build distributed systems experience\"]). Matched against project.growth_opportunities using keyword overlap and ANN embedding similarity for growth_score computation."
+        },
+        {
+          "name": "project_history",
+          "type": "JSONB",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "jsonb_typeof(project_history) = 'array'",
+          "description": "List of past project reference objects. Each entry schema: {\"project_name\": string, \"role\": string, \"duration_weeks\": integer, \"skills_used\": [string], \"outcome\": string (optional)}. Used to enrich the skill embedding with experience context."
+        },
+        {
+          "name": "is_behavioral_self_reported",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "TRUE",
+          "description": "TRUE when work_style_vector and motivation_vector were manually provided by the developer. FALSE when inferred from behavioral analysis. Surfaced as a data-quality badge in match responses to alert that behavioral scores may be less accurate for self-reported profiles."
+        },
+        {
+          "name": "embedding_status",
+          "type": "VARCHAR(20)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "'pending'",
+          "check": "embedding_status IN ('pending', 'ready', 'failed')",
+          "description": "Lifecycle status of embedding generation for this profile. 'pending': profile persisted, embedding enqueued. 'ready': both skill and behavioral embeddings available in developer_embeddings. 'failed': embedding generation failed after 3 retries. Matching engine returns degraded keyword-only response (workstyle_score=motivation_score=0.5, badge 'behavioral_data_unavailable') for non-ready status."
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_developer_profiles_timezone",
+          "fields": ["timezone"],
+          "unique": false,
+          "description": "Batch timezone_score computation filtering by timezone region."
+        },
+        {
+          "name": "idx_developer_profiles_embedding_status",
+          "fields": ["embedding_status"],
+          "unique": false,
+          "description": "POST /api/v1/admin/reembed batch query: WHERE embedding_status IN ('pending', 'failed')."
+        },
+        {
+          "name": "idx_developer_profiles_experience_years",
+          "fields": ["experience_years"],
+          "unique": false
+        }
+      ],
+      "gdpr_erasure": {
+        "contains_pii": true,
+        "pii_fields": ["skills", "experience_years", "preferred_stack", "work_style_vector", "motivation_vector", "timezone", "availability_hours", "career_goals", "project_history"],
+        "action": "DELETE",
+        "cascade_step": 1,
+        "trigger": "Root trigger of the GDPR erasure cascade. Initiated by DELETE /api/v1/developers/{id} received by gdpr-erasure-handler.",
+        "notes": "Deletion of this row automatically cascades to: DeveloperEmbedding (step 2, ON DELETE CASCADE), MatchRecord (step 3, ON DELETE CASCADE), FeedbackRecord (step 4, direct FK CASCADE), AllocationRecord (step 5, ON DELETE CASCADE), ExplanationCache (step 6, ON DELETE CASCADE). UserAccount is explicitly deleted in step 7. The cascade is wrapped in a single PostgreSQL transaction with SAVEPOINT for atomicity."
+      }
+    },
+    {
+      "name": "ProjectProfile",
+      "table_name": "project_profiles",
+      "description": "Organizational project entity. Contains all structured attributes used by the five-dimension matching engine for computing project-side scores. Not developer PII; not subject to GDPR developer erasure. MatchRecord and AllocationRecord rows referencing a project are soft-linked (FK ON DELETE CASCADE for MatchRecord; FK SET NULL for AllocationRecord) so project deletion does not leak developer data.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default": "gen_random_uuid()",
+          "description": "Surrogate primary key. Used in all project API routes and as FK target in MatchRecord, AllocationRecord, and ProjectEmbedding."
+        },
+        {
+          "name": "name",
+          "type": "VARCHAR(255)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Human-readable project name. Displayed on developer dashboard recommendation cards."
+        },
+        {
+          "name": "required_skills",
+          "type": "JSONB",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "jsonb_typeof(required_skills) = 'array'",
+          "description": "List of required skill identifier strings (e.g., [\"Python\", \"FastAPI\", \"PostgreSQL\"]). Target set for skill_score Jaccard similarity against developer.skills. Array length >= 1 enforced at application layer."
+        },
+        {
+          "name": "team_structure",
+          "type": "JSONB",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Structured description of team composition and working patterns. Minimum schema: {\"team_size\": integer, \"roles\": [string], \"working_mode\": string (e.g., 'async-first' | 'sync-heavy' | 'hybrid'), \"review_culture\": string (e.g., 'high-feedback' | 'low-overhead')}. Encoded as text for project skill embedding; used in workstyle_score ANN computation."
+        },
+        {
+          "name": "workload_intensity",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "workload_intensity >= 0.0 AND workload_intensity <= 1.0",
+          "description": "Float [0.0, 1.0] representing expected weekly workload pressure on allocated developers. Copied into AllocationRecord.workload_intensity when a developer is allocated to this project. Values >= 0.8 sustained over >= 48 consecutive weeks trigger burnout_risk_score > 0.6."
+        },
+        {
+          "name": "innovation_level",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "innovation_level >= 0.0 AND innovation_level <= 1.0",
+          "description": "Float [0.0, 1.0] representing degree of novel or creative work involved. Encoded alongside growth_opportunities for motivation_score computation: higher innovation_level increases alignment score for developers with high technical_challenge or innovation_drive motivation dimensions."
+        },
+        {
+          "name": "timezone_overlap_required",
+          "type": "VARCHAR(64)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "IANA timezone string or region identifier indicating the minimum required overlap window (e.g., 'America/New_York', 'US-East', 'UTC+0±2'). Used in timezone_score computation via timezone distance matrix."
+        },
+        {
+          "name": "duration_weeks",
+          "type": "INTEGER",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "duration_weeks > 0",
+          "description": "Expected total project duration in weeks. Determines the project end_date in AllocationRecord (start_date + duration_weeks * 7 days). Critical input to bench_risk_score computation."
+        },
+        {
+          "name": "growth_opportunities",
+          "type": "JSONB",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "jsonb_typeof(growth_opportunities) = 'array'",
+          "description": "List of growth opportunity strings articulating what developers can gain (e.g., [\"Architecture ownership\", \"ML/AI exposure\", \"Team leadership\", \"Cross-functional collaboration\"]). Matched against developer.career_goals using keyword overlap and ANN embedding similarity for growth_score computation."
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_project_profiles_timezone_overlap",
+          "fields": ["timezone_overlap_required"],
+          "unique": false
+        },
+        {
+          "name": "idx_project_profiles_workload_intensity",
+          "fields": ["workload_intensity"],
+          "unique": false
+        }
+      ],
+      "gdpr_erasure": {
+        "contains_pii": false,
+        "action": "RETAIN",
+        "notes": "ProjectProfile is organizational data, not developer PII. Not included in GDPR developer erasure cascade. When a ProjectProfile is deleted by a manager (DELETE /api/v1/projects/{id}), its MatchRecord rows cascade-delete and AllocationRecord.project_id FKs are SET NULL — developer profiles are unaffected."
+      }
+    },
+    {
+      "name": "DeveloperEmbedding",
+      "table_name": "developer_embeddings",
+      "description": "pgvector table storing 1536-dimensional skill and behavioral embedding vectors per DeveloperProfile. Co-located in PostgreSQL per ADR-001 to enable single-transaction GDPR cascade. HNSW index with cosine distance operator provides sub-150ms ANN search. Two rows per developer (embedding_type: 'skill' and 'behavioral') are upserted by the embedding-worker after each profile create or update.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default": "gen_random_uuid()"
+        },
+        {
+          "name": "developer_id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "developer_profiles",
+            "references_field": "id",
+            "on_delete": "CASCADE"
+          },
+          "description": "FK to DeveloperProfile. ON DELETE CASCADE ensures embedding is automatically purged when DeveloperProfile is deleted in GDPR step 1."
+        },
+        {
+          "name": "embedding_type",
+          "type": "VARCHAR(20)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "embedding_type IN ('skill', 'behavioral')",
+          "description": "'skill': generated from developer.skills + preferred_stack + experience_years context. 'behavioral': generated from work_style_vector + motivation_vector + career_goals encoded as structured text."
+        },
+        {
+          "name": "vector",
+          "type": "VECTOR(1536)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "1536-dimensional float embedding vector (pgvector VECTOR type). Queried via cosine distance operator: embedding <=> $query_vector. Dimension 1536 matches text-embedding-3-small output; if sentence-transformers/all-MiniLM-L6-v2 is used, dimension is 384 (requires schema migration and HNSW index rebuild)."
+        },
+        {
+          "name": "model_name",
+          "type": "VARCHAR(100)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Embedding model identifier that generated this vector (e.g., 'text-embedding-3-small', 'all-MiniLM-L6-v2'). Checked by POST /api/v1/admin/reembed to identify stale vectors after model upgrades."
+        },
+        {
+          "name": "model_version",
+          "type": "VARCHAR(50)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Version string of the embedding model (e.g., '3-small-2024-02-15'). Allows detecting vectors that must be re-generated after a model version bump."
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        }
+      ],
+      "constraints": [
+        {
+          "type": "UNIQUE",
+          "name": "uq_developer_embeddings_dev_type",
+          "fields": ["developer_id", "embedding_type"],
+          "description": "One embedding row per (developer, type) pair. INSERT ... ON CONFLICT (developer_id, embedding_type) DO UPDATE used for upsert on profile updates."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_developer_embeddings_hnsw_skill",
+          "fields": ["vector"],
+          "type": "HNSW",
+          "partial_condition": "WHERE embedding_type = 'skill'",
+          "operator_class": "vector_cosine_ops",
+          "parameters": {"m": 16, "ef_construction": 64},
+          "create_sql": "CREATE INDEX idx_developer_embeddings_hnsw_skill ON developer_embeddings USING hnsw (vector vector_cosine_ops) WITH (m=16, ef_construction=64) WHERE embedding_type = 'skill';",
+          "description": "Partial HNSW index for skill-type ANN search. Enables: SELECT developer_id, vector <=> $1 AS distance FROM developer_embeddings WHERE embedding_type = 'skill' ORDER BY distance LIMIT $k."
+        },
+        {
+          "name": "idx_developer_embeddings_hnsw_behavioral",
+          "fields": ["vector"],
+          "type": "HNSW",
+          "partial_condition": "WHERE embedding_type = 'behavioral'",
+          "operator_class": "vector_cosine_ops",
+          "parameters": {"m": 16, "ef_construction": 64},
+          "create_sql": "CREATE INDEX idx_developer_embeddings_hnsw_behavioral ON developer_embeddings USING hnsw (vector vector_cosine_ops) WITH (m=16, ef_construction=64) WHERE embedding_type = 'behavioral';",
+          "description": "Partial HNSW index for behavioral-type ANN search. Used for workstyle_score and motivation_score computation."
+        },
+        {
+          "name": "idx_developer_embeddings_developer_id",
+          "fields": ["developer_id"],
+          "unique": false,
+          "description": "FK lookup index for CASCADE DELETE performance at scale."
+        }
+      ],
+      "gdpr_erasure": {
+        "contains_pii": true,
+        "pii_fields": ["vector"],
+        "action": "DELETE",
+        "cascade_step": 2,
+        "trigger": "ON DELETE CASCADE from developer_profiles.id. Both 'skill' and 'behavioral' rows for the developer_id are deleted automatically when DeveloperProfile is deleted in step 1.",
+        "notes": "Embedding vectors encode developer behavioral and skill data derived from PII fields. Purged via FK CASCADE. Explicit inclusion in cascade transaction verified by gdpr-erasure-handler's post-commit validation query."
+      }
+    },
+    {
+      "name": "ProjectEmbedding",
+      "table_name": "project_embeddings",
+      "description": "pgvector table storing 1536-dimensional skill embeddings per ProjectProfile. Used by the matching engine for candidate ANN retrieval — finding developers whose skill profile is most similar to project requirements. One row per project (embedding_type: 'skill'). Not developer PII.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default": "gen_random_uuid()"
+        },
+        {
+          "name": "project_id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "project_profiles",
+            "references_field": "id",
+            "on_delete": "CASCADE"
+          },
+          "description": "FK to ProjectProfile. ON DELETE CASCADE when a project is deleted by a manager."
+        },
+        {
+          "name": "embedding_type",
+          "type": "VARCHAR(20)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "embedding_type IN ('skill')",
+          "description": "Currently only 'skill' type. Phase 2 may introduce 'culture' or 'behavioral' embedding types for team-composition matching."
+        },
+        {
+          "name": "vector",
+          "type": "VECTOR(1536)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "1536-dimensional vector encoding required_skills + team_structure text. Same dimensionality and model as developer skill embeddings to enable symmetric cosine similarity comparison."
+        },
+        {
+          "name": "model_name",
+          "type": "VARCHAR(100)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false
+        },
+        {
+          "name": "model_version",
+          "type": "VARCHAR(50)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        }
+      ],
+      "constraints": [
+        {
+          "type": "UNIQUE",
+          "name": "uq_project_embeddings_proj_type",
+          "fields": ["project_id", "embedding_type"],
+          "description": "One embedding row per (project, type) pair. Upserted on project updates."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_project_embeddings_hnsw_cosine",
+          "fields": ["vector"],
+          "type": "HNSW",
+          "operator_class": "vector_cosine_ops",
+          "parameters": {"m": 16, "ef_construction": 64},
+          "create_sql": "CREATE INDEX idx_project_embeddings_hnsw_cosine ON project_embeddings USING hnsw (vector vector_cosine_ops) WITH (m=16, ef_construction=64);",
+          "description": "HNSW index for project-side ANN search: find top-K projects matching a developer skill vector."
+        }
+      ],
+      "gdpr_erasure": {
+        "contains_pii": false,
+        "action": "RETAIN",
+        "notes": "Project embeddings encode organizational project data only. Not included in GDPR developer erasure cascade. Deleted via ON DELETE CASCADE when a ProjectProfile is deleted by a manager."
+      }
+    },
+    {
+      "name": "MatchRecord",
+      "table_name": "match_records",
+      "description": "Persisted result of a five-dimension match computation between a DeveloperProfile and a ProjectProfile. Contains all component scores, the composite match_score, a weights snapshot, and explanation metadata. The explanation field is populated with a deterministic stub on creation (per ADR-003) and asynchronously replaced with the full LLM explanation.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default": "gen_random_uuid()",
+          "description": "Surrogate primary key. Returned as match_id in all match API responses."
+        },
+        {
+          "name": "developer_id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "developer_profiles",
+            "references_field": "id",
+            "on_delete": "CASCADE"
+          },
+          "description": "FK to DeveloperProfile. ON DELETE CASCADE ensures all match records are purged in GDPR step 3."
+        },
+        {
+          "name": "project_id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "project_profiles",
+            "references_field": "id",
+            "on_delete": "CASCADE"
+          },
+          "description": "FK to ProjectProfile. ON DELETE CASCADE when a project is deleted."
+        },
+        {
+          "name": "match_score",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "match_score >= 0.0 AND match_score <= 1.0",
+          "description": "Composite weighted match score: MATCH_SCORE = w1*skill_score + w2*workstyle_score + w3*motivation_score + w4*timezone_score + w5*growth_score. Used for developer dashboard ranking and acceptance criteria AC1, AC2, AC11."
+        },
+        {
+          "name": "skill_score",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "skill_score >= 0.0 AND skill_score <= 1.0",
+          "description": "Jaccard similarity between developer.skills and project.required_skills, weighted by experience_years relevance."
+        },
+        {
+          "name": "workstyle_score",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "workstyle_score >= 0.0 AND workstyle_score <= 1.0",
+          "description": "Cosine similarity between developer behavioral embedding and project team_structure embedding. Defaults to 0.5 when vector_search_degraded=TRUE."
+        },
+        {
+          "name": "motivation_score",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "motivation_score >= 0.0 AND motivation_score <= 1.0",
+          "description": "Cosine similarity between developer behavioral embedding and project innovation+growth embedding. Defaults to 0.5 when vector_search_degraded=TRUE."
+        },
+        {
+          "name": "timezone_score",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "timezone_score >= 0.0 AND timezone_score <= 1.0",
+          "description": "Overlap score derived from timezone distance matrix between developer.timezone and project.timezone_overlap_required."
+        },
+        {
+          "name": "growth_score",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "growth_score >= 0.0 AND growth_score <= 1.0",
+          "description": "Keyword overlap and ANN embedding similarity between developer.career_goals and project.growth_opportunities."
+        },
+        {
+          "name": "explanation",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Current explanation text. On creation: deterministic stub >= 50 chars covering skill-alignment, behavioral-fit, and growth sentences (per ADR-003 and AC3). Updated asynchronously by claude-explanation-service with full LLM output. Check explanation_source to determine maturity."
+        },
+        {
+          "name": "explanation_source",
+          "type": "VARCHAR(30)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "explanation_source IN ('stub_pending', 'stub_permanent', 'claude_cached', 'claude_async')",
+          "description": "Maturity of the explanation field. 'stub_pending': Claude async call enqueued, stub returned. 'stub_permanent': Claude retries exhausted (3 attempts), stub is final explanation. 'claude_cached': full explanation served from ExplanationCache (prior hit). 'claude_async': full Claude response received and stored asynchronously."
+        },
+        {
+          "name": "explanation_updated_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "description": "Timestamp when the explanation field was last updated by an async LLM response. NULL until first LLM update. Enables clients to detect whether a stub has been promoted to a full explanation since last poll."
+        },
+        {
+          "name": "risks",
+          "type": "JSONB",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "'[]'",
+          "description": "List of risk strings identified in the LLM explanation (may be empty list). Example: [\"Timezone overlap is marginal — 2-hour window only\", \"Developer has no prior distributed systems experience\"]."
+        },
+        {
+          "name": "growth_potential",
+          "type": "JSONB",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "'[]'",
+          "description": "List of growth potential strings from the LLM explanation (may be empty list). Example: [\"Strong match to stated ML/AI career goal\", \"Architecture ownership opportunity aligns with leadership aspirations\"]."
+        },
+        {
+          "name": "weights_snapshot",
+          "type": "JSONB",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Snapshot of WeightConfig at time of match computation. Schema: {\"w1_skill\": float, \"w2_workstyle\": float, \"w3_motivation\": float, \"w4_timezone\": float, \"w5_growth\": float, \"weight_config_version\": integer}. Enables reproducibility audit and ExplanationCache key derivation."
+        },
+        {
+          "name": "vector_search_degraded",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "FALSE",
+          "description": "TRUE when the pgvector ANN query exceeded 150ms timeout; workstyle_score and motivation_score were defaulted to 0.5 (neutral). Match response includes badge 'vector_search_degraded: true' to notify clients."
+        },
+        {
+          "name": "timestamp",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()",
+          "description": "When the match was computed."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_match_records_developer_id",
+          "fields": ["developer_id"],
+          "unique": false,
+          "description": "Base FK index for all developer-scoped queries."
+        },
+        {
+          "name": "idx_match_records_developer_score_desc",
+          "fields": ["developer_id", "match_score"],
+          "unique": false,
+          "description": "Composite index for efficient top-K retrieval: SELECT * FROM match_records WHERE developer_id=$1 ORDER BY match_score DESC LIMIT $k."
+        },
+        {
+          "name": "idx_match_records_project_id",
+          "fields": ["project_id"],
+          "unique": false
+        },
+        {
+          "name": "idx_match_records_timestamp",
+          "fields": ["timestamp"],
+          "unique": false,
+          "description": "Range queries for match history within a time window."
+        },
+        {
+          "name": "idx_match_records_explanation_source",
+          "fields": ["explanation_source"],
+          "unique": false,
+          "description": "Batch async worker query: WHERE explanation_source = 'stub_pending' for pending LLM calls."
+        }
+      ],
+      "gdpr_erasure": {
+        "contains_pii": true,
+        "pii_fields": ["developer_id", "explanation", "risks", "growth_potential", "weights_snapshot"],
+        "action": "DELETE",
+        "cascade_step": 3,
+        "trigger": "ON DELETE CASCADE from developer_profiles.id. All MatchRecord rows for the developer_id are deleted when DeveloperProfile is deleted in step 1. FeedbackRecord rows referencing these MatchRecords are also cascaded (step 4).",
+        "notes": "Explanation text may contain developer-derived career goals or skill descriptions embedded by the LLM. weights_snapshot captures match context that could contribute to profile reconstruction. All rows deleted."
+      }
+    },
+    {
+      "name": "FeedbackRecord",
+      "table_name": "feedback_records",
+      "description": "Developer accept/reject feedback on a match recommendation. Feeds rejection-rate analytics (GET /api/v1/analytics/rejection-rate). One record per (developer, match) pair. Sample count < 10 triggers the minimum floor: rejection_ratio returned as null to prevent statistically unreliable manager alerts.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default": "gen_random_uuid()"
+        },
+        {
+          "name": "developer_id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "developer_profiles",
+            "references_field": "id",
+            "on_delete": "CASCADE"
+          },
+          "description": "Direct FK to DeveloperProfile for fast developer-scoped queries and redundant GDPR cascade path. ON DELETE CASCADE in step 4."
+        },
+        {
+          "name": "match_id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "match_records",
+            "references_field": "id",
+            "on_delete": "CASCADE"
+          },
+          "description": "FK to MatchRecord. ON DELETE CASCADE when MatchRecord is deleted (step 3 of GDPR cascade triggers this chained cascade)."
+        },
+        {
+          "name": "accepted",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "TRUE = developer accepted the recommendation. FALSE = developer rejected it. Rejection ratio = COUNT(accepted=false) / COUNT(*) per developer."
+        },
+        {
+          "name": "timestamp",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()",
+          "description": "When the feedback was submitted via POST /api/v1/matches/feedback."
+        }
+      ],
+      "constraints": [
+        {
+          "type": "UNIQUE",
+          "name": "uq_feedback_records_dev_match",
+          "fields": ["developer_id", "match_id"],
+          "description": "Prevents duplicate feedback submission for the same match. Enforced at DB level; application returns HTTP 409 on duplicate."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_feedback_records_developer_id_accepted",
+          "fields": ["developer_id", "accepted"],
+          "unique": false,
+          "description": "Rejection-rate query index: SELECT COUNT(*), COUNT(CASE WHEN accepted=false THEN 1 END) FROM feedback_records WHERE developer_id=$1."
+        },
+        {
+          "name": "idx_feedback_records_match_id",
+          "fields": ["match_id"],
+          "unique": false
+        }
+      ],
+      "gdpr_erasure": {
+        "contains_pii": true,
+        "pii_fields": ["developer_id"],
+        "action": "DELETE",
+        "cascade_step": 4,
+        "trigger": "ON DELETE CASCADE via two independent paths: (1) direct developer_id FK from developer_profiles.id deletion in step 1, and (2) chained match_id FK from match_records.id deletion in step 3. Both paths delete FeedbackRecord rows.",
+        "notes": "Two independent FK CASCADE paths provide resilience: even if one cascade path is delayed, the other ensures deletion. All feedback records for the developer are purged."
+      }
+    },
+    {
+      "name": "AllocationRecord",
+      "table_name": "allocation_records",
+      "description": "Tracks current and historical developer project allocations. Provides end_date and workload_intensity data consumed by the Risk Prediction Engine. Bench-risk and burnout-risk formulas are computed directly from this table: bench_risk = f(end_date, days_until_next_allocation); burnout_risk = f(consecutive_high_intensity_weeks, workload_intensity_mean, motivation_alignment_factor).",
+      "fields": [
+        {
+          "name": "id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default": "gen_random_uuid()"
+        },
+        {
+          "name": "developer_id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "developer_profiles",
+            "references_field": "id",
+            "on_delete": "CASCADE"
+          },
+          "description": "FK to DeveloperProfile. ON DELETE CASCADE for GDPR step 5."
+        },
+        {
+          "name": "project_id",
+          "type": "UUID",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "project_profiles",
+            "references_field": "id",
+            "on_delete": "SET NULL"
+          },
+          "description": "FK to ProjectProfile. SET NULL if the project is deleted — preserves the developer's allocation history (workload data) for risk computation until the developer's own GDPR erasure. NULL value represents an allocation without an active project (bench period)."
+        },
+        {
+          "name": "start_date",
+          "type": "DATE",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Start date of this allocation period. Used with end_date to calculate consecutive_high_intensity_weeks for burnout risk: SUM of (end_date - start_date) in days / 7 for contiguous AllocationRecord windows where workload_intensity >= 0.8."
+        },
+        {
+          "name": "end_date",
+          "type": "DATE",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "end_date >= start_date",
+          "description": "Project end date for this allocation. CRITICAL for bench-risk computation: bench_risk_score = min(1.0, max(0.0, (28 - days_until_end) / 28)) when no AllocationRecord with start_date within the next 28 days exists for this developer. Score > 0.7 when end_date is within 28 days and no follow-on allocation exists (per AC5)."
+        },
+        {
+          "name": "workload_intensity",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "workload_intensity >= 0.0 AND workload_intensity <= 1.0",
+          "description": "Actual workload intensity for this allocation period [0.0, 1.0]. CRITICAL for burnout-risk computation: burnout_risk = min(1.0, (consecutive_high_intensity_weeks / 48) * workload_intensity_mean * (1 - motivation_alignment_factor)). Score > 0.6 when developer has >= 48 consecutive weeks at workload_intensity >= 0.8 (per AC4). Typically copied from ProjectProfile.workload_intensity at allocation time but may be overridden."
+        },
+        {
+          "name": "is_active",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "TRUE",
+          "description": "TRUE for the developer's current active allocation(s). Multiple records may be active if the developer is split-allocated across projects."
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_allocation_records_developer_id",
+          "fields": ["developer_id"],
+          "unique": false
+        },
+        {
+          "name": "idx_allocation_records_developer_end_date",
+          "fields": ["developer_id", "end_date"],
+          "unique": false,
+          "description": "Bench-risk query: SELECT * FROM allocation_records WHERE developer_id=$1 ORDER BY end_date ASC — finds the soonest expiring allocation."
+        },
+        {
+          "name": "idx_allocation_records_developer_active",
+          "fields": ["developer_id", "is_active"],
+          "unique": false,
+          "description": "Fast active-allocation lookup for risk computation: WHERE developer_id=$1 AND is_active=TRUE."
+        },
+        {
+          "name": "idx_allocation_records_workload_intensity",
+          "fields": ["developer_id", "workload_intensity", "start_date"],
+          "unique": false,
+          "description": "Burnout-risk computation: scan developer's allocation history ordered by start_date to compute consecutive high-intensity weeks."
+        }
+      ],
+      "gdpr_erasure": {
+        "contains_pii": true,
+        "pii_fields": ["developer_id", "start_date", "end_date", "workload_intensity"],
+        "action": "DELETE",
+        "cascade_step": 5,
+        "trigger": "ON DELETE CASCADE from developer_profiles.id. All allocation records for the developer_id are deleted when DeveloperProfile is deleted in step 1.",
+        "notes": "project_id FK is SET NULL (not CASCADE) on project deletion, so AllocationRecord rows survive project removal. However, all AllocationRecord rows are fully deleted via developer_id CASCADE during GDPR erasure — project_id nullification is irrelevant at that point."
+      }
+    },
+    {
+      "name": "WeightConfig",
+      "table_name": "weight_config",
+      "description": "Singleton-row configuration table for the five match dimension weights (w1–w5). Supports runtime update without code redeployment via PUT /api/v1/config/weights. The matching engine reads from this table on every match request (no in-process caching per failure-mode FM-007) to ensure immediate weight propagation across all API replicas. Default weights are validated against the good-match and bad-match test scenarios before seeding.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default": "1",
+          "check": "id = 1",
+          "description": "Singleton row identifier. PK constraint enforces exactly one row. All operations use UPSERT ON CONFLICT (id) DO UPDATE."
+        },
+        {
+          "name": "w1_skill",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "w1_skill >= 0.0",
+          "default": "0.30",
+          "description": "Weight for skill dimension score in MATCH_SCORE formula. Default 0.30."
+        },
+        {
+          "name": "w2_workstyle",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "w2_workstyle >= 0.0",
+          "default": "0.25",
+          "description": "Weight for work-style dimension score. Default 0.25."
+        },
+        {
+          "name": "w3_motivation",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "w3_motivation >= 0.0",
+          "default": "0.20",
+          "description": "Weight for motivation dimension score. Default 0.20."
+        },
+        {
+          "name": "w4_timezone",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "w4_timezone >= 0.0",
+          "default": "0.15",
+          "description": "Weight for timezone overlap dimension score. Default 0.15."
+        },
+        {
+          "name": "w5_growth",
+          "type": "DOUBLE PRECISION",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "w5_growth >= 0.0",
+          "default": "0.10",
+          "description": "Weight for growth potential dimension score. Default 0.10."
+        },
+        {
+          "name": "version",
+          "type": "INTEGER",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "1",
+          "description": "Monotonically incremented on each successful PUT /api/v1/config/weights. Embedded in MatchRecord.weights_snapshot as 'weight_config_version' for auditability."
+        },
+        {
+          "name": "updated_by",
+          "type": "UUID",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "user_accounts",
+            "references_field": "id",
+            "on_delete": "SET NULL"
+          },
+          "description": "UserAccount.id of the manager who last updated the weights. NULL for seed/default configuration."
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        }
+      ],
+      "constraints": [
+        {
+          "type": "CHECK",
+          "name": "chk_weight_config_sum",
+          "expression": "ABS(w1_skill + w2_workstyle + w3_motivation + w4_timezone + w5_growth - 1.0) < 0.001",
+          "description": "DB-level enforcement that weights sum to 1.0 (±0.001 tolerance). Also validated at application layer in Pydantic model for PUT /api/v1/config/weights before the DB write."
+        }
+      ],
+      "weight_config_storage_notes": {
+        "storage_model": "singleton_row_config_table",
+        "update_mechanism": "INSERT INTO weight_config (id, w1_skill, w2_workstyle, w3_motivation, w4_timezone, w5_growth, version, updated_by) VALUES (1, $1, $2, $3, $4, $5, 1, $6) ON CONFLICT (id) DO UPDATE SET w1_skill=$1, w2_workstyle=$2, w3_motivation=$3, w4_timezone=$4, w5_growth=$5, version=weight_config.version+1, updated_by=$6, updated_at=NOW()",
+        "runtime_reload": true,
+        "runtime_reload_notes": "SELECT * FROM weight_config WHERE id=1 on every match request from PostgreSQL primary. No in-process caching. Guarantees immediate weight propagation across all API replicas after PUT. Trade-off: <5ms additional DB read per match request.",
+        "code_deployment_required": false,
+        "default_weights": {
+          "w1_skill": 0.30,
+          "w2_workstyle": 0.25,
+          "w3_motivation": 0.20,
+          "w4_timezone": 0.15,
+          "w5_growth": 0.10,
+          "weight_config_version": 1
+        },
+        "validation_rules": [
+          "All wi >= 0.0",
+          "|w1 + w2 + w3 + w4 + w5 - 1.0| < 0.001",
+          "HTTP 400 returned on validation failure; previous config preserved unchanged"
+        ],
+        "explanation_cache_invalidation": "PUT /api/v1/config/weights increments version field; ExplanationCache entries are effectively invalidated because the cache_key includes SHA-256 of weights_snapshot_hash which changes with version."
+      },
+      "gdpr_erasure": {
+        "contains_pii": false,
+        "action": "RETAIN",
+        "notes": "WeightConfig is operational configuration, not developer PII. Not included in GDPR developer erasure cascade."
+      }
+    },
+    {
+      "name": "PromptVersion",
+      "table_name": "prompt_versions",
+      "description": "Versioned, immutable records of LLM prompt templates used by the Explanation Service. Satisfies requirement: 'LLM prompt definitions stored as versioned, auditable artifacts, not hardcoded strings' (AC12). Each row is immutable after creation — new versions create new rows. The active version (is_active=TRUE) per prompt_key is loaded at service startup and reloaded on SIGHUP. Dual traceability: DB record + artifact file in artifacts/prompts/.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default": "gen_random_uuid()"
+        },
+        {
+          "name": "prompt_key",
+          "type": "VARCHAR(100)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Logical name of the prompt template (e.g., 'match_explanation', 'risk_summary', 'bench_alert'). Multiple version rows share the same prompt_key. Service loads: WHERE prompt_key=$1 AND is_active=TRUE."
+        },
+        {
+          "name": "version",
+          "type": "INTEGER",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "version >= 1",
+          "description": "Monotonically incrementing version number per prompt_key. Starts at 1. Versions are immutable — updating a prompt requires creating a new row with version=N+1 and setting is_active=TRUE."
+        },
+        {
+          "name": "template_text",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Full prompt template text with {{placeholder}} substitution tokens. Allowed placeholders: {{skill_score}}, {{workstyle_score}}, {{motivation_score}}, {{timezone_score}}, {{growth_score}}, {{match_score}}, {{developer_career_goals}}, {{project_growth_opportunities}}, {{developer_experience_years}}, {{project_name}}, {{developer_timezone}}, {{project_timezone_overlap}}. PROHIBITED placeholders: {{work_style_vector}}, {{motivation_vector}} — raw behavioral vectors must never appear in LLM prompts per system constraint."
+        },
+        {
+          "name": "system_prompt",
+          "type": "TEXT",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "description": "Optional system-level instruction text prepended to all LLM API calls using this template. Used to enforce output format constraints (e.g., 'Section 1: Skill Alignment — [sentence]. Section 2: Behavioral Fit — [sentence]. Section 3: Growth Potential — [sentence].')."
+        },
+        {
+          "name": "model_name",
+          "type": "VARCHAR(100)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Target LLM model identifier for this prompt version (e.g., 'gemini-1.5-flash' Phase-1; 'claude-3-5-haiku-20241022' supported alternate, per ADR-004). Stored for regression detection: if the active model_name differs from the deployed model, the QA regression test alerts the team."
+        },
+        {
+          "name": "is_active",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "FALSE",
+          "description": "TRUE for the current active version of this prompt_key. Application layer ensures at most one row per prompt_key has is_active=TRUE (enforced via UPDATE-then-INSERT pattern)."
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "description": "Human-readable changelog description for this version (e.g., 'Added explicit output format constraints to compensate for Haiku instruction-following variance')."
+        },
+        {
+          "name": "artifact_ref",
+          "type": "VARCHAR(255)",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "description": "File path of the source prompt artifact (e.g., 'artifacts/prompts/match_explanation_v1.json'). Enables traceability between artifact files (referenced in code_spec.json) and DB records."
+        },
+        {
+          "name": "created_by",
+          "type": "VARCHAR(100)",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "description": "Identifier of the agent, pipeline phase, or person who created this version (e.g., 'architect-agent', 'developer-agent', 'admin')."
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        }
+      ],
+      "constraints": [
+        {
+          "type": "UNIQUE",
+          "name": "uq_prompt_versions_key_version",
+          "fields": ["prompt_key", "version"],
+          "description": "One record per (key, version) pair. Versions are immutable once created."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_prompt_versions_key_active",
+          "fields": ["prompt_key", "is_active"],
+          "unique": false,
+          "description": "Active version lookup: SELECT * FROM prompt_versions WHERE prompt_key=$1 AND is_active=TRUE LIMIT 1."
+        }
+      ],
+      "prompt_artifact_schema": {
+        "file_pattern": "artifacts/prompts/<prompt_key>_v<version>.json",
+        "fields": {
+          "prompt_key": "string",
+          "version": "integer",
+          "template_text": "string — prompt body with {{placeholder}} tokens",
+          "system_prompt": "string or null",
+          "model_name": "string — LLM model identifier",
+          "placeholders": "array of strings — expected substitution keys",
+          "description": "string — change description",
+          "created_at": "ISO 8601 timestamp"
+        },
+        "mandatory_output_sections": [
+          "Section 1: Skill Alignment",
+          "Section 2: Behavioral Fit",
+          "Section 3: Growth Potential"
+        ],
+        "prohibited_placeholders": ["work_style_vector", "motivation_vector"],
+        "notes": "Prompt artifact files are the primary source of truth for prompt templates. On each code deployment, the latest artifact file version is seeded into the prompt_versions DB table if not already present. Changing a prompt template requires only creating a new artifact file version and seeding it — no application source code modifications."
+      },
+      "gdpr_erasure": {
+        "contains_pii": false,
+        "action": "RETAIN",
+        "notes": "PromptVersion records are system configuration and audit artifacts. Not developer PII. Retained indefinitely for auditability and regression testing."
+      }
+    },
+    {
+      "name": "ExplanationCache",
+      "table_name": "explanation_cache",
+      "description": "Caches full LLM-generated explanations keyed by SHA-256(developer_profile_hash + project_profile_hash + weights_snapshot_hash). TTL = 7 days. Prevents redundant LLM API calls for repeated (developer, project, weights) combinations. Cache entries are automatically invalidated after weight changes because the cache_key hash incorporates the weights snapshot. Expired entries are swept by a periodic cleanup job (DELETE WHERE expires_at < NOW()).",
+      "fields": [
+        {
+          "name": "id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default": "gen_random_uuid()"
+        },
+        {
+          "name": "cache_key",
+          "type": "VARCHAR(64)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": true,
+          "description": "SHA-256 hex digest of concatenated hashes: SHA256(developer_profile_canonical_json) + SHA256(project_profile_canonical_json) + SHA256(weights_snapshot_json). Deterministic lookup key. 64-char hex string."
+        },
+        {
+          "name": "developer_id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "developer_profiles",
+            "references_field": "id",
+            "on_delete": "CASCADE"
+          },
+          "description": "FK to DeveloperProfile. ON DELETE CASCADE purges cached explanations in GDPR step 6."
+        },
+        {
+          "name": "project_id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "project_profiles",
+            "references_field": "id",
+            "on_delete": "CASCADE"
+          },
+          "description": "FK to ProjectProfile."
+        },
+        {
+          "name": "match_id",
+          "type": "UUID",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "match_records",
+            "references_field": "id",
+            "on_delete": "SET NULL"
+          },
+          "description": "Optional reference to the MatchRecord that triggered this cache entry. SET NULL when MatchRecord is deleted."
+        },
+        {
+          "name": "explanation",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Full LLM-generated explanation text (>= 50 chars, contains all three mandatory sections per AC3)."
+        },
+        {
+          "name": "prompt_version_id",
+          "type": "UUID",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "foreign_key": {
+            "references_table": "prompt_versions",
+            "references_field": "id",
+            "on_delete": "SET NULL"
+          },
+          "description": "Reference to the PromptVersion used to generate this explanation. Enables cache invalidation on prompt version change: explanations generated with an older prompt version are stale after a prompt upgrade."
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "NOW()"
+        },
+        {
+          "name": "expires_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Cache expiry timestamp: created_at + INTERVAL '7 days'. Cache hit query: WHERE cache_key=$1 AND expires_at > NOW(). Stale entries excluded automatically; periodic sweep deletes them."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_explanation_cache_key",
+          "fields": ["cache_key"],
+          "unique": true,
+          "description": "Primary lookup path for cache hit check."
+        },
+        {
+          "name": "idx_explanation_cache_developer_id",
+          "fields": ["developer_id"],
+          "unique": false,
+          "description": "Fast bulk invalidation by developer_id on GDPR erasure (CASCADE handles deletion; this index accelerates the pre-erasure audit check)."
+        },
+        {
+          "name": "idx_explanation_cache_expires_at",
+          "fields": ["expires_at"],
+          "unique": false,
+          "description": "TTL sweep job: DELETE FROM explanation_cache WHERE expires_at < NOW(). Scheduled hourly."
+        }
+      ],
+      "gdpr_erasure": {
+        "contains_pii": true,
+        "pii_fields": ["developer_id", "explanation"],
+        "action": "DELETE",
+        "cascade_step": 6,
+        "trigger": "ON DELETE CASCADE from developer_profiles.id via developer_id FK. All ExplanationCache entries for the developer are automatically deleted when DeveloperProfile is deleted in step 1.",
+        "notes": "Explanation text may contain developer-derived career context (career goals, skill descriptions) synthesized by the LLM from the match input. Treated as derived PII. Purged in cascade step 6."
+      }
+    },
+    {
+      "name": "ErasureAuditLog",
+      "table_name": "erasure_audit_log",
+      "description": "Immutable compliance audit trail for GDPR erasure requests. Intentionally retained after developer profile deletion per GDPR Article 5(2) accountability principle and Article 17(3)(b). developer_id is stored as a VARCHAR string (not FK) so the record persists after the DeveloperProfile row is gone. No profile content is stored — only metadata about the erasure event. Accessible via GET /api/v1/admin/erasure-audit/{developer_id} (manager role only).",
+      "fields": [
+        {
+          "name": "id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default": "gen_random_uuid()"
+        },
+        {
+          "name": "erasure_request_id",
+          "type": "UUID",
+          "nullable": false,
+          "primary_key": false,
+          "unique": true,
+          "default": "gen_random_uuid()",
+          "description": "Unique correlation identifier returned to the client on erasure failure (HTTP 500 body) and on success (HTTP 204 header X-Erasure-Request-Id). Enables compliance verification and support escalation."
+        },
+        {
+          "name": "developer_id",
+          "type": "VARCHAR(36)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "UUID string of the developer whose profile was erased. Stored as VARCHAR (not FK) so this record persists after DeveloperProfile deletion. Enables GET /api/v1/admin/erasure-audit/{developer_id} even post-erasure."
+        },
+        {
+          "name": "requested_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "description": "Timestamp when DELETE /api/v1/developers/{id} was received by the API."
+        },
+        {
+          "name": "completed_at",
+          "type": "TIMESTAMPTZ",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "description": "Timestamp when the erasure transaction committed successfully. NULL when status is 'pending' or 'failed'."
+        },
+        {
+          "name": "status",
+          "type": "VARCHAR(20)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "check": "status IN ('pending', 'completed', 'failed')",
+          "description": "'pending': transaction in-flight (should not persist in steady state). 'completed': all six cascade steps committed and post-commit GET returns 404 for developer_id. 'failed': transaction rolled back; developer data remains intact; manual remediation required."
+        },
+        {
+          "name": "initiating_user_id",
+          "type": "VARCHAR(36)",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "description": "UUID string of the UserAccount that initiated the erasure request (developer self-erasure or manager action). Stored as VARCHAR for same persistence reason as developer_id."
+        },
+        {
+          "name": "error_detail",
+          "type": "TEXT",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "description": "Error message from the failed cascade operation. Populated only when status='failed'. Used for manual remediation."
+        },
+        {
+          "name": "steps_completed",
+          "type": "JSONB",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "description": "JSON array of cascade step labels completed before failure. Example: [\"developer_profile\", \"developer_embeddings\"]. Aids manual remediation by identifying which entities were partially deleted before rollback."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_erasure_audit_log_developer_id",
+          "fields": ["developer_id"],
+          "unique": false,
+          "description": "Lookup for GET /api/v1/admin/erasure-audit/{developer_id} compliance verification query."
+        },
+        {
+          "name": "idx_erasure_audit_log_status",
+          "fields": ["status"],
+          "unique": false,
+          "description": "Operational monitoring: SELECT COUNT(*) FROM erasure_audit_log WHERE status='failed' for alerting."
+        },
+        {
+          "name": "idx_erasure_audit_log_requested_at",
+          "fields": ["requested_at"],
+          "unique": false,
+          "description": "Time-range compliance audits."
+        }
+      ],
+      "gdpr_erasure": {
+        "contains_pii": true,
+        "pii_fields": ["developer_id", "initiating_user_id"],
+        "action": "RETAIN",
+        "retention_period": "5 years from completed_at per GDPR Article 17(3)(b) and Article 5(2) accountability obligation",
+        "notes": "ErasureAuditLog is deliberately retained after developer profile deletion. It records only the fact and outcome of the erasure event — no profile content. The developer_id is a pseudonymous reference post-erasure (no joinable profile row exists). Records must be retained for compliance audit and data protection authority requests. Automated purge of audit records older than 5 years is recommended for Phase 2."
+      }
+    }
+  ],
+  "vector_embedding_schema": {
+    "store_technology": "pgvector extension on PostgreSQL 15",
+    "adr_ref": "ADR-001",
+    "rationale": "Co-located with relational data in the same PostgreSQL instance for single-transaction GDPR cascade atomicity. No additional services to operate. HNSW index provides sufficient ANN performance for Phase 1 scale (10K–100K vectors).",
+    "embedding_dimension": 1536,
+    "distance_metric": "cosine",
+    "sql_distance_operator": "<=>",
+    "index_type": "HNSW",
+    "hnsw_parameters": {
+      "m": 16,
+      "ef_construction": 64,
+      "ef_search": 64,
+      "notes": "m=16 and ef_construction=64 are tuned for 10K–100K vectors achieving <10ms query latency at ef_search=64. Index build at 10K vectors completes in <30 seconds on commodity hardware. REINDEX CONCURRENTLY required when embedding model is upgraded to a different dimensionality."
+    },
+    "embedding_types": [
+      {
+        "name": "developer_skill",
+        "table": "developer_embeddings",
+        "embedding_type_value": "skill",
+        "dimension": 1536,
+        "source_fields": [
+          "developer_profiles.skills",
+          "developer_profiles.preferred_stack",
+          "developer_profiles.experience_years",
+          "developer_profiles.project_history"
+        ],
+        "encoding_template": "Skills: {skills_csv}. Preferred stack: {stack_csv}. Experience: {experience_years} years. Past projects: {project_history_summary}.",
+        "used_for": "Candidate retrieval: find top-K projects with required_skills similar to developer skill profile. Used in skill_score and initial ANN candidate shortlisting.",
+        "hnsw_index": "idx_developer_embeddings_hnsw_skill (partial: WHERE embedding_type='skill')"
+      },
+      {
+        "name": "developer_behavioral",
+        "table": "developer_embeddings",
+        "embedding_type_value": "behavioral",
+        "dimension": 1536,
+        "source_fields": [
+          "developer_profiles.work_style_vector",
+          "developer_profiles.motivation_vector",
+          "developer_profiles.career_goals"
+        ],
+        "encoding_template": "Work style dimensions: {work_style_vector_csv}. Motivation dimensions: {motivation_vector_csv}. Career goals: {career_goals_csv}.",
+        "used_for": "workstyle_score computation (cosine similarity with project behavioral embedding). motivation_score computation (cosine similarity with project innovation+growth embedding).",
+        "privacy_note": "Raw work_style_vector and motivation_vector values are encoded into the embedding but NEVER passed to LLM prompts or included in API responses.",
+        "hnsw_index": "idx_developer_embeddings_hnsw_behavioral (partial: WHERE embedding_type='behavioral')"
+      },
+      {
+        "name": "project_skill",
+        "table": "project_embeddings",
+        "embedding_type_value": "skill",
+        "dimension": 1536,
+        "source_fields": [
+          "project_profiles.required_skills",
+          "project_profiles.team_structure",
+          "project_profiles.growth_opportunities",
+          "project_profiles.innovation_level"
+        ],
+        "encoding_template": "Required skills: {required_skills_csv}. Team: {team_structure_summary}. Growth opportunities: {growth_opportunities_csv}. Innovation level: {innovation_level}.",
+        "used_for": "Symmetric ANN search: find developers most similar to project requirements. Project-side target for workstyle_score and motivation_score cosine similarity computation.",
+        "hnsw_index": "idx_project_embeddings_hnsw_cosine"
+      }
+    ],
+    "ann_query_example": "SELECT developer_id, vector <=> $1::vector AS cosine_distance FROM developer_embeddings WHERE embedding_type = 'skill' ORDER BY cosine_distance LIMIT $2;",
+    "fallback_on_timeout": "Matching engine wraps each vector query in a 150ms asyncio timeout. On timeout: workstyle_score and motivation_score default to 0.5 (neutral); MatchRecord.vector_search_degraded=TRUE; response includes badge 'vector_search_degraded: true'.",
+    "re_embedding_trigger": "POST /api/v1/admin/reembed initiates batch re-embedding for all profiles. Required when model_name or model_version changes. Followed by REINDEX CONCURRENTLY of all HNSW indexes.",
+    "gdpr_notes": "All developer embedding rows (both types) are purged via ON DELETE CASCADE in GDPR step 2. Project embeddings are not developer PII and are retained."
+  },
+  "weight_config_storage": {
+    "entity": "WeightConfig",
+    "table_name": "weight_config",
+    "storage_model": "singleton_row_config_table",
+    "description": "A single PostgreSQL row (id=1) stores the five active dimension weights. Chosen over config files (which require deployment) and Redis (which adds an operational dependency) to maintain transactional consistency with match records and to enable immediate propagation across all API replicas from a single source of truth.",
+    "update_api_endpoint": "PUT /api/v1/config/weights",
+    "update_sql_pattern": "INSERT INTO weight_config (id, w1_skill, w2_workstyle, w3_motivation, w4_timezone, w5_growth, version, updated_by, updated_at) VALUES (1, $1, $2, $3, $4, $5, 1, $6, NOW()) ON CONFLICT (id) DO UPDATE SET w1_skill=EXCLUDED.w1_skill, w2_workstyle=EXCLUDED.w2_workstyle, w3_motivation=EXCLUDED.w3_motivation, w4_timezone=EXCLUDED.w4_timezone, w5_growth=EXCLUDED.w5_growth, version=weight_config.version+1, updated_by=EXCLUDED.updated_by, updated_at=NOW();",
+    "read_sql_pattern": "SELECT w1_skill, w2_workstyle, w3_motivation, w4_timezone, w5_growth, version FROM weight_config WHERE id=1;",
+    "code_deployment_required": false,
+    "validation_layer": "Pydantic model (application) + CHECK constraint (database)",
+    "validation_rules": {
+      "all_non_negative": "w1 >= 0.0 AND w2 >= 0.0 AND w3 >= 0.0 AND w4 >= 0.0 AND w5 >= 0.0",
+      "sum_to_one": "|w1+w2+w3+w4+w5 - 1.0| < 0.001",
+      "failure_behavior": "HTTP 400 returned; previous configuration preserved unchanged in DB"
+    },
+    "default_weights": {
+      "w1_skill": 0.30,
+      "w2_workstyle": 0.25,
+      "w3_motivation": 0.20,
+      "w4_timezone": 0.15,
+      "w5_growth": 0.10
+    },
+    "default_rationale": "Defaults weighted toward skills (0.30) as the most objective dimension, then work style (0.25) and motivation (0.20) as behavioral dimensions, then timezone (0.15) and growth (0.10). Validated against good-match (score >= 0.75) and bad-match (score <= 0.45) test scenarios before seeding.",
+    "versioning": "version column incremented on every successful PUT. Embedded in MatchRecord.weights_snapshot as 'weight_config_version'. Enables audit: which weight configuration produced a given match score.",
+    "cache_policy": "No in-process cache in Phase 1. Direct DB primary read per match request (<5ms). Phase 2 option: Redis cache with 60s TTL and explicit cache-bust on PUT /api/v1/config/weights.",
+    "explanation_cache_interaction": "PUT /api/v1/config/weights invalidates ExplanationCache: cache_key incorporates weights_snapshot_hash which changes when weights version increments. Old explanations are not actively deleted — they expire via TTL or are bypassed because the new cache_key won't match."
+  },
+  "gdpr_erasure_cascade": {
+    "trigger_endpoint": "DELETE /api/v1/developers/{id}",
+    "handler_component": "gdpr-erasure-handler",
+    "transaction_scope": "Single PostgreSQL transaction with SAVEPOINT",
+    "atomicity_guarantee": "All six cascade steps complete together or none complete. Partial deletion is impossible due to ROLLBACK TO SAVEPOINT on any step failure.",
+    "execution_order": [
+      {
+        "step": 1,
+        "entity": "DeveloperProfile",
+        "table": "developer_profiles",
+        "operation": "DELETE FROM developer_profiles WHERE id = $developer_id",
+        "cascade_triggered": ["developer_embeddings (step 2)", "match_records (step 3)", "feedback_records (step 4 direct path)", "allocation_records (step 5)", "explanation_cache (step 6)"],
+        "notes": "Root deletion. ON DELETE CASCADE FKs automatically propagate to steps 2–6. UserAccount.developer_profile_id is SET NULL."
+      },
+      {
+        "step": 2,
+        "entity": "DeveloperEmbedding",
+        "table": "developer_embeddings",
+        "operation": "ON DELETE CASCADE from developer_profiles.id",
+        "data_purged": "Both 'skill' and 'behavioral' embedding vectors for the developer_id. All pgvector VECTOR(1536) data encoding developer PII is deleted.",
+        "notes": "Embedding purge is within the same PostgreSQL transaction — atomicity guaranteed per ADR-001 GDPR advantage."
+      },
+      {
+        "step": 3,
+        "entity": "MatchRecord",
+        "table": "match_records",
+        "operation": "ON DELETE CASCADE from developer_profiles.id",
+        "data_purged": "All match records for the developer including explanation text, risk lists, growth potential lists, and weights snapshots.",
+        "cascade_triggered": ["feedback_records (step 4 chained path)", "explanation_cache match_id FK SET NULL"]
+      },
+      {
+        "step": 4,
+        "entity": "FeedbackRecord",
+        "table": "feedback_records",
+        "operation": "ON DELETE CASCADE from developer_profiles.id (direct path) AND from match_records.id (chained path from step 3)",
+        "data_purged": "All accept/reject feedback records for the developer.",
+        "notes": "Two independent CASCADE paths ensure redundancy. Direct developer_id FK fires when DeveloperProfile is deleted (step 1). Chained match_id FK fires when MatchRecord is deleted (step 3). Both delete the same rows — duplicate DELETE is a no-op in PostgreSQL."
+      },
+      {
+        "step": 5,
+        "entity": "AllocationRecord",
+        "table": "allocation_records",
+        "operation": "ON DELETE CASCADE from developer_profiles.id",
+        "data_purged": "All historical and active allocation records including start_date, end_date, and workload_intensity data.",
+        "notes": "project_id FK in AllocationRecord is SET NULL on ProjectProfile deletion — developer allocations survive project deletion. But all allocation rows are fully deleted by developer_id CASCADE in this GDPR step."
+      },
+      {
+        "step": 6,
+        "entity": "ExplanationCache",
+        "table": "explanation_cache",
+        "operation": "ON DELETE CASCADE from developer_profiles.id via developer_id FK",
+        "data_purged": "All cached LLM explanation texts referencing the developer. Explanation content may contain developer-derived career goals and skill descriptions synthesized by the LLM.",
+        "notes": "Cache entries referencing the developer's matches are also reached via match_id FK SET NULL when MatchRecord rows are deleted in step 3 — those entries remain in the cache table but with match_id=NULL and will expire via TTL. The developer_id CASCADE in step 6 ensures complete deletion of all developer-referencing cache entries."
+      },
+      {
+        "step": 7,
+        "entity": "UserAccount",
+        "table": "user_accounts",
+        "operation": "DELETE FROM user_accounts WHERE id = (SELECT id FROM user_accounts WHERE developer_profile_id IS NULL AND username = (SELECT username FROM user_accounts WHERE developer_profile_id = $developer_id_before_step1))",
+        "operation_simplified": "Explicit DELETE of the UserAccount row linked to the developer. UserAccount.developer_profile_id was SET NULL in step 1; the UserAccount row is explicitly deleted in this step.",
+        "sql_pattern": "DELETE FROM user_accounts WHERE id IN (SELECT ua.id FROM user_accounts ua JOIN developer_profiles_erasure_staging eps ON ua.id = eps.user_account_id WHERE eps.developer_id = $developer_id)",
+        "notes": "Performed as an explicit DELETE statement within the same transaction after DeveloperProfile cascade is confirmed. Manager-role UserAccounts are never affected."
+      }
+    ],
+    "retained_after_erasure": [
+      {
+        "entity": "ErasureAuditLog",
+        "table": "erasure_audit_log",
+        "reason": "Compliance record for GDPR Article 5(2) accountability and Article 17 right-to-erasure audit. Records only the fact of erasure (developer_id string, timestamps, status) — no profile data content. developer_id stored as VARCHAR (not FK) to survive cascade.",
+        "retention_period": "5 years from completed_at"
+      },
+      {
+        "entity": "ProjectProfile",
+        "table": "project_profiles",
+        "reason": "Organizational data. Not developer PII."
+      },
+      {
+        "entity": "ProjectEmbedding",
+        "table": "project_embeddings",
+        "reason": "Encodes project organizational data only. Not developer PII."
+      },
+      {
+        "entity": "WeightConfig",
+        "table": "weight_config",
+        "reason": "System configuration. Not PII."
+      },
+      {
+        "entity": "PromptVersion",
+        "table": "prompt_versions",
+        "reason": "Prompt template audit records. Not PII. Retained for regression testing and compliance auditability of AI behavior."
+      },
+      {
+        "entity": "ExplanationCache (orphaned entries)",
+        "table": "explanation_cache",
+        "reason": "Cache entries for this developer where developer_id CASCADE fires are deleted. Entries that may reference the developer indirectly (via project_id only, with match_id SET NULL) are not developer-attributable and expire naturally via TTL.",
+        "retention_period": "TTL-based: expires_at + automated sweep"
+      }
+    ],
+    "failure_handling": {
+      "mechanism": "SAVEPOINT erasure_cascade; ROLLBACK TO SAVEPOINT erasure_cascade on any operation failure",
+      "outcome_on_failure": "Full rollback. Developer profile and all associated data remain intact — no partial deletion.",
+      "http_response_on_failure": {
+        "status_code": 500,
+        "body": {
+          "error_code": "ERASURE_TRANSACTION_FAILED",
+          "message": "Developer profile erasure failed and was rolled back. Data is preserved. Reference erasure_request_id for support.",
+          "erasure_request_id": "<UUID from ErasureAuditLog>"
+        }
+      },
+      "audit_log_on_failure": "ErasureAuditLog row created with status='failed', error_detail populated, steps_completed populated with labels of any steps that committed before rollback.",
+      "http_response_on_success": {
+        "status_code": 204,
+        "headers": {"X-Erasure-Request-Id": "<UUID>"}
+      },
+      "post_commit_verification": "After transaction commit, gdpr-erasure-handler executes SELECT COUNT(*) FROM developer_profiles WHERE id=$developer_id; expects 0. If non-zero (unexpected), logs error and fires manual-remediation alert. HTTP 204 still returned if transaction committed successfully.",
+      "subsequent_get_expectation": "GET /api/v1/developers/{id} returns HTTP 404 after successful erasure (AC9)."
+    }
+  }
+}

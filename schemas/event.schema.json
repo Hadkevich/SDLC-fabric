@@ -1,0 +1,76 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "WorkflowEvent",
+    "type": "object",
+    "required": [
+        "event_id",
+        "workflow_id",
+        "stage",
+        "agent",
+        "status",
+        "timestamp"
+    ],
+    "properties": {
+        "event_id": {
+            "type": "string"
+        },
+        "workflow_id": {
+            "type": "string"
+        },
+        "stage": {
+            "type": "string"
+        },
+        "agent": {
+            "type": "string"
+        },
+        "input_refs": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "output_refs": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "status": {
+            "type": "string",
+            "enum": [
+                "success",
+                "failure",
+                "blocked",
+                "retry"
+            ]
+        },
+        "summary": {
+            "type": "string"
+        },
+        "blocking_issues": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "retry_count": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "timestamp": {
+            "type": "string"
+        },
+        "metrics": {
+            "description": "Resource spend reported by the agent runtime for this step (absent when the runner reports none).",
+            "type": "object",
+            "properties": {
+                "input_tokens": { "type": "integer", "minimum": 0 },
+                "output_tokens": { "type": "integer", "minimum": 0 },
+                "total_tokens": { "type": "integer", "minimum": 0 },
+                "cost_usd": { "type": "number", "minimum": 0 },
+                "duration_ms": { "type": "number", "minimum": 0 }
+            }
+        }
+    },
+    "additionalProperties": true
+}

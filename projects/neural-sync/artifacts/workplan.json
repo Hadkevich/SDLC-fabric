@@ -1,0 +1,263 @@
+{
+  "spec_version": "v1",
+  "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
+  "tasks": [
+    {
+      "task_id": "T-01-ARCHITECTURE",
+      "title": "System Architecture & Architectural Decision Records",
+      "owner_agent": "architect-agent",
+      "inputs": [
+        "artifacts/requirements.json"
+      ],
+      "outputs": [
+        "artifacts/architecture.json",
+        "artifacts/adr/adr-001-vector-store.json",
+        "artifacts/adr/adr-002-auth-model.json",
+        "artifacts/adr/adr-003-latency-sla.json",
+        "artifacts/adr/adr-004-claude-model.json"
+      ],
+      "depends_on": [],
+      "done_criteria": [
+        "artifacts/architecture.json validates against schemas/architecture.schema.json",
+        "All four open questions resolved with documented ADR rationale: (1) vector storage technology (pgvector vs embedded vs managed service), (2) authentication model (API-key vs JWT/session for MVP), (3) latency SLA scope (whether 500ms p95 includes the LLM API call or only algorithmic scoring), (4) LLM provider/model selection",
+        "ADR files created for each decision: adr-001-vector-store.json, adr-002-auth-model.json, adr-003-latency-sla.json, adr-004-claude-model.json; each validates against schemas/adr.schema.json",
+        "Architecture confirms horizontal scalability path to 10,000+ developer profiles without architectural rework",
+        "Tech stack confirmed and documented: Python/FastAPI backend, React frontend, configurable LLM explanation provider (Phase-1 Google Gemini; Claude API supported), PostgreSQL relational store, chosen vector-compatible storage",
+        "Component diagram covers: profile ingestion service, matching engine, LLM explanation service, risk prediction engine, GDPR erasure handler, feedback/analytics service, vector embedding store, relational DB"
+      ]
+    },
+    {
+      "task_id": "T-02-API-CONTRACTS",
+      "title": "REST API Contract Specification (OpenAPI 3.1)",
+      "owner_agent": "architect-agent",
+      "inputs": [
+        "artifacts/requirements.json",
+        "artifacts/architecture.json"
+      ],
+      "outputs": [
+        "artifacts/api-contracts.json"
+      ],
+      "depends_on": [
+        "T-01-ARCHITECTURE"
+      ],
+      "done_criteria": [
+        "artifacts/api-contracts.json is a valid OpenAPI 3.1 document",
+        "POST /api/v1/matches endpoint defined with request body accepting DeveloperProfile JSON + ProjectProfile JSON and response schema containing match_score (number 0.0–1.0), explanation (string), risks (array), growth_potential (array)",
+        "GET /api/v1/developers/{id}/risk endpoint defined returning burnout_risk_score (number) and bench_risk_score (number)",
+        "PUT /api/v1/config/weights endpoint defined with request body accepting weight map w1–w5 (floats summing to 1.0)",
+        "DELETE /api/v1/developers/{id} endpoint defined returning HTTP 204 on success; GET /api/v1/developers/{id} defined returning HTTP 404 when not found",
+        "POST /api/v1/matches/feedback endpoint defined with request body containing developer_id, match_id, and accepted (boolean)",
+        "GET /api/v1/analytics/rejection-rate endpoint defined with query parameter developer_id and response containing rejection_ratio",
+        "CRUD endpoints for DeveloperProfile and ProjectProfile ingestion defined",
+        "All response schemas, error codes, and authentication requirements documented per ADR-002 decision"
+      ]
+    },
+    {
+      "task_id": "T-03-DATA-MODEL",
+      "title": "Data Model & Storage Schema Design",
+      "owner_agent": "architect-agent",
+      "inputs": [
+        "artifacts/requirements.json",
+        "artifacts/architecture.json"
+      ],
+      "outputs": [
+        "artifacts/data-model.json"
+      ],
+      "depends_on": [
+        "T-01-ARCHITECTURE"
+      ],
+      "done_criteria": [
+        "artifacts/data-model.json defines DeveloperProfile entity with all required fields: id, skills, experience_years, preferred_stack, work_style vector, motivation_vector, timezone, availability_hours, career_goals, project_history",
+        "artifacts/data-model.json defines ProjectProfile entity with all required fields: id, required_skills, team_structure, workload_intensity, innovation_level, timezone_overlap_required, duration_weeks, growth_opportunities",
+        "MatchRecord entity defined capturing developer_id, project_id, match_score, explanation, risks, growth_potential, weights_snapshot, timestamp",
+        "FeedbackRecord entity defined capturing developer_id, match_id, accepted (boolean), timestamp",
+        "Vector embedding table/collection schema defined for behavioral and skill embeddings, consistent with ADR-001 chosen vector store",
+        "PromptVersion entity or artifact-reference schema defined to track versioned LLM prompt templates",
+        "AllocationRecord entity defined with project end_date and workload_intensity fields to support bench-risk and burnout-risk computation",
+        "GDPR erasure cascade documented for every entity: structured profile deletion, embedding purge, match history purge, feedback purge — all triggered by DELETE /api/v1/developers/{id}",
+        "Weight configuration storage defined (table or config file) supporting runtime update without code deployment"
+      ]
+    },
+    {
+      "task_id": "T-04-BACKEND",
+      "title": "Backend Implementation (FastAPI, Matching Engine, Risk Engine, GDPR, Feedback, LLM Explanation Layer)",
+      "owner_agent": "developer-agent",
+      "inputs": [
+        "artifacts/requirements.json",
+        "artifacts/architecture.json",
+        "artifacts/api-contracts.json",
+        "artifacts/data-model.json"
+      ],
+      "outputs": [
+        "artifacts/code_spec.json",
+        "artifacts/prompts/match_explanation_v1.json",
+        "src/api/matches.py",
+        "src/api/developers.py",
+        "src/api/projects.py",
+        "src/api/config.py",
+        "src/api/feedback.py",
+        "src/api/analytics.py",
+        "src/engine/matching.py",
+        "src/engine/risk.py",
+        "src/engine/embeddings.py",
+        "src/services/claude_service.py",
+        "src/db/models.py",
+        "src/db/migrations/"
+      ],
+      "depends_on": [
+        "T-02-API-CONTRACTS",
+        "T-03-DATA-MODEL"
+      ],
+      "done_criteria": [
+        "artifacts/code_spec.json validates against schemas/code_spec.schema.json and references artifacts/prompts/match_explanation_v1.json as the versioned prompt artifact",
+        "POST /api/v1/matches computes MATCH_SCORE = w1·skill_score + w2·workstyle_score + w3·motivation_score + w4·timezone_score + w5·growth_score with runtime-configurable weights and returns match_score, explanation (≥50 chars), risks (list), growth_potential (list) [AC1, AC2, AC6]",
+        "Behavioral dimension is demonstrably active: two developers with identical skills but opposing work_style vectors produce different match_scores confirming w2·workstyle_score is non-zero [AC2]",
+        "LLM integration calls the versioned prompt template (artifacts/prompts/match_explanation_v1.json); the prompt instructs the LLM to produce at minimum one skill-alignment statement, one behavioral/work-style statement, and one growth/career statement in every explanation [AC3]",
+        "No LLM prompt strings are inline in application source files; code_spec.json references the prompt artifact file path [AC12]",
+        "Changing artifacts/prompts/match_explanation_v1.json does not require modifying any .py source file [AC12]",
+        "PUT /api/v1/config/weights persists the new w1–w5 weight map; all subsequent POST /api/v1/matches calls on identical profile inputs return scores reflecting the updated weights [AC6]",
+        "GET /api/v1/developers/{id}/risk returns burnout_risk_score > 0.6 when developer's allocation record shows ≥48 consecutive weeks at workload_intensity ≥ 0.8 [AC4]",
+        "GET /api/v1/developers/{id}/risk returns bench_risk_score > 0.7 when developer's current project end_date is within 28 days and no follow-on allocation exists [AC5]",
+        "DELETE /api/v1/developers/{id} purges: the developer's structured profile row, all associated vector embeddings, all MatchRecord rows, and all FeedbackRecord rows; returns HTTP 204; a subsequent GET /api/v1/developers/{id} returns HTTP 404 [AC9]",
+        "POST /api/v1/matches/feedback stores FeedbackRecord; GET /api/v1/analytics/rejection-rate?developer_id={id} returns the rejection ratio computed from stored feedback with ≥1 sample [AC10]",
+        "Manager-facing API endpoints do not return raw work_style vectors or motivation scalar arrays in any response body; only aggregated risk scores and badges are exposed [AC8]",
+        "Database migrations and seed data fixture (≥50 developer profiles, ≥20 project profiles) included to support local development and CI testing"
+      ]
+    },
+    {
+      "task_id": "T-05-FRONTEND",
+      "title": "Frontend Implementation (React Developer & Manager Dashboards)",
+      "owner_agent": "developer-agent",
+      "inputs": [
+        "artifacts/architecture.json",
+        "artifacts/api-contracts.json",
+        "artifacts/code_spec.json"
+      ],
+      "outputs": [
+        "frontend/src/pages/DeveloperDashboard.tsx",
+        "frontend/src/pages/ManagerDashboard.tsx",
+        "frontend/src/components/ProjectCard.tsx",
+        "frontend/src/components/RiskBadge.tsx",
+        "frontend/src/api/client.ts",
+        "frontend/package.json"
+      ],
+      "depends_on": [
+        "T-04-BACKEND"
+      ],
+      "done_criteria": [
+        "Developer dashboard view renders ≥1 recommended project cards for any developer who has a complete profile with all required fields populated; each card displays match_score and LLM-generated explanation string [AC7]",
+        "Manager dashboard view displays per-developer risk badges (bench risk, burnout risk) and overall team composition health metrics [AC8]",
+        "Manager dashboard does not render raw behavioral vectors, motivation scalar values, or work_style array data in any UI component; only risk scores and badge states are displayed [AC8]",
+        "Both dashboards consume backend REST API endpoints as defined in artifacts/api-contracts.json",
+        "Frontend is implemented in React per tech-stack constraint",
+        "Frontend build completes without errors"
+      ]
+    },
+    {
+      "task_id": "T-06-REVIEW",
+      "title": "Code Review",
+      "owner_agent": "reviewer-agent",
+      "inputs": [
+        "artifacts/code_spec.json",
+        "artifacts/architecture.json",
+        "artifacts/api-contracts.json",
+        "artifacts/prompts/match_explanation_v1.json",
+        "src/",
+        "frontend/src/"
+      ],
+      "outputs": [
+        "artifacts/review_report.json"
+      ],
+      "depends_on": [
+        "T-04-BACKEND",
+        "T-05-FRONTEND"
+      ],
+      "done_criteria": [
+        "artifacts/review_report.json validates against schemas/review_report.schema.json",
+        "All 13 acceptance criteria reviewed and mapped to implemented code sections in the report",
+        "Prompt versioning verified: reviewer confirms no inline LLM prompt strings exist in any source file and that code_spec.json references the prompt artifact [AC12]",
+        "GDPR erasure cascade implementation verified: reviewer confirms DELETE triggers purge of profile, embeddings, match history, and feedback records [AC9]",
+        "Manager dashboard API responses verified to exclude raw behavioral vectors and motivation scalars [AC8]",
+        "Matching engine weight-configurability verified: weights are read at runtime from config/DB, not hardcoded [AC6]",
+        "Risk scoring logic reviewed for correctness against AC4 (burnout) and AC5 (bench) threshold criteria",
+        "No critical security vulnerabilities (e.g., SQL injection, unauthenticated deletion of other users' data) identified without a documented mitigation",
+        "verdict field is one of: approved, approved_with_comments, rejected"
+      ]
+    },
+    {
+      "task_id": "T-07-QA",
+      "title": "Test Planning & Execution",
+      "owner_agent": "qa-agent",
+      "inputs": [
+        "artifacts/code_spec.json",
+        "artifacts/api-contracts.json",
+        "artifacts/architecture.json",
+        "artifacts/requirements.json",
+        "src/",
+        "frontend/src/"
+      ],
+      "outputs": [
+        "artifacts/test_plan.json",
+        "tests/test_matching_engine.py",
+        "tests/test_risk_engine.py",
+        "tests/test_gdpr_erasure.py",
+        "tests/test_feedback_analytics.py",
+        "tests/test_weight_config.py",
+        "tests/integration/test_full_pipeline.py"
+      ],
+      "depends_on": [
+        "T-04-BACKEND",
+        "T-05-FRONTEND"
+      ],
+      "done_criteria": [
+        "artifacts/test_plan.json validates against schemas/test_plan.schema.json",
+        "Labeled 'good match' test scenario (high skill + work_style + motivation alignment) produces match_score ≥ 0.75; expected score range documented in test_plan.json [AC11]",
+        "Labeled 'bad match' test scenario (skill overlap but opposing behavioral vectors) produces match_score ≤ 0.45; expected score range documented in test_plan.json [AC11]",
+        "Behavioral dimension test: Pair A (identical skills, opposing work_style vectors) has strictly lower match_score than Pair B (identical skills, aligned work_style vectors), confirming w2 is non-zero and active [AC2]",
+        "Weight-change deterministic unit test: given known profile pair inputs, PUT /api/v1/config/weights with new weight map causes subsequent POST /api/v1/matches to return score delta within expected range [AC6]",
+        "Burnout-risk test: developer with ≥48 consecutive weeks at workload_intensity ≥ 0.8 returns burnout_risk_score > 0.6 [AC4]",
+        "Bench-risk test: developer whose current project end_date is within 28 days and has no follow-on allocation returns bench_risk_score > 0.7 [AC5]",
+        "POST /api/v1/matches response validation test: match_score is float 0.0–1.0, explanation is non-empty string ≥ 50 chars, risks is a list, growth_potential is a list [AC1]",
+        "Latency test: POST /api/v1/matches p95 latency ≤ 500ms verified under nominal load against local environment [AC1]",
+        "GDPR erasure test: DELETE /api/v1/developers/{id} returns 204; subsequent GET /api/v1/developers/{id} returns 404; confirmation that embeddings, match history, and feedback are absent [AC9]",
+        "Feedback and rejection-rate test: POST /api/v1/matches/feedback stores record; GET /api/v1/analytics/rejection-rate?developer_id={id} returns correct ratio with ≥1 sample [AC10]",
+        "LLM explanation structure regression test: explanation string contains at least one statement about skill alignment, one about work-style or behavioral alignment, and one about growth or career potential [AC3]",
+        "Automated integration test exercises the full match pipeline end-to-end: profile ingest → embed → score → LLM explain → response, runs against local or mocked environment and passes [AC13]",
+        "Developer dashboard test: dashboard renders ≥1 project card with match_score and explanation for a developer with complete profile [AC7]",
+        "Manager dashboard test: risk badges render; raw behavioral vectors and motivation scalars are absent from rendered output [AC8]",
+        "test_plan.json summary.failed == 0"
+      ]
+    },
+    {
+      "task_id": "T-08-DEPLOY",
+      "title": "Deployment & Release",
+      "owner_agent": "devops-agent",
+      "inputs": [
+        "artifacts/review_report.json",
+        "artifacts/test_plan.json",
+        "artifacts/code_spec.json",
+        "artifacts/architecture.json",
+        "src/",
+        "frontend/src/",
+        "tests/"
+      ],
+      "outputs": [
+        "artifacts/release_report.json"
+      ],
+      "depends_on": [
+        "T-06-REVIEW",
+        "T-07-QA"
+      ],
+      "done_criteria": [
+        "artifacts/release_report.json validates against schemas/release_report.schema.json",
+        "artifacts/review_report.json verdict is confirmed to be one of {approved, approved_with_comments} before deployment proceeds",
+        "artifacts/test_plan.json summary.failed is confirmed to be 0 before deployment proceeds",
+        "Backend service (FastAPI) starts successfully and responds to a health-check endpoint",
+        "Frontend (React) build artifacts are produced and served correctly",
+        "CI pipeline executes and passes: unit tests, integration test (full match pipeline end-to-end), and latency check [AC13]",
+        "Database migrations run successfully against the target environment",
+        "Deployment is reproducible via documented runbook or Dockerfile/compose file in release_report.json"
+      ]
+    }
+  ]
+}

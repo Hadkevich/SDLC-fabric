@@ -1,0 +1,43 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "CodeSpec",
+    "type": "object",
+    "required": ["spec_version", "workflow_id", "task_id", "title", "files_affected", "implementation_notes", "test_refs"],
+    "additionalProperties": false,
+    "properties": {
+        "spec_version": { "type": "string", "const": "v1" },
+        "workflow_id": { "type": "string" },
+        "task_id": { "type": "string" },
+        "title": { "type": "string" },
+        "files_affected": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["path", "change_type"],
+                "additionalProperties": false,
+                "properties": {
+                    "path": { "type": "string" },
+                    "change_type": {
+                        "type": "string",
+                        "enum": ["created", "modified", "deleted", "renamed"]
+                    },
+                    "description": { "type": "string" }
+                }
+            }
+        },
+        "implementation_notes": { "type": "string" },
+        "contracts_satisfied": {
+            "type": "array",
+            "items": { "type": "string" }
+        },
+        "test_refs": {
+            "type": "array",
+            "items": { "type": "string" }
+        },
+        "known_limitations": {
+            "type": "array",
+            "items": { "type": "string" }
+        }
+    }
+}

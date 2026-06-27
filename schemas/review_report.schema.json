@@ -1,0 +1,45 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ReviewReport",
+    "type": "object",
+    "required": ["spec_version", "workflow_id", "task_id", "reviewer", "verdict", "blocking_issues", "non_blocking_issues", "reviewed_at"],
+    "additionalProperties": false,
+    "properties": {
+        "spec_version": { "type": "string", "const": "v1" },
+        "workflow_id": { "type": "string" },
+        "task_id": { "type": "string" },
+        "reviewer": { "type": "string" },
+        "verdict": {
+            "type": "string",
+            "enum": ["approved", "approved_with_comments", "rejected"]
+        },
+        "blocking_issues": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/Issue" }
+        },
+        "non_blocking_issues": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/Issue" }
+        },
+        "summary": { "type": "string" },
+        "reviewed_at": { "type": "string", "format": "date-time" }
+    },
+    "$defs": {
+        "Issue": {
+            "type": "object",
+            "required": ["id", "category", "description"],
+            "additionalProperties": false,
+            "properties": {
+                "id": { "type": "string" },
+                "category": {
+                    "type": "string",
+                    "enum": ["correctness", "security", "performance", "maintainability", "contract_violation", "test_coverage", "scope"]
+                },
+                "description": { "type": "string" },
+                "file_ref": { "type": "string" },
+                "line_ref": { "type": "integer" },
+                "suggestion": { "type": "string" }
+            }
+        }
+    }
+}

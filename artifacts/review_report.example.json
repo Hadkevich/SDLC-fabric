@@ -1,0 +1,26 @@
+{
+    "spec_version": "v1",
+    "workflow_id": "wf-habit-tracker-001",
+    "task_id": "T-006",
+    "reviewer": "reviewer-agent",
+    "verdict": "approved_with_comments",
+    "blocking_issues": [],
+    "non_blocking_issues": [
+        {
+            "id": "NB-001",
+            "category": "maintainability",
+            "description": "DB session management is inline in route handlers; consider extracting a dependency.",
+            "file_ref": "src/main.py",
+            "line_ref": 42,
+            "suggestion": "Use FastAPI Depends() with a get_db generator."
+        },
+        {
+            "id": "NB-002",
+            "category": "test_coverage",
+            "description": "No test for GET /habits/:id with a non-existent id (404 path).",
+            "suggestion": "Add TC-008: GET /habits/9999 should return 404."
+        }
+    ],
+    "summary": "Implementation matches api-contracts.json and all acceptance criteria are covered by tests. Two non-blocking improvements noted.",
+    "reviewed_at": "2026-06-24T09:30:00Z"
+}

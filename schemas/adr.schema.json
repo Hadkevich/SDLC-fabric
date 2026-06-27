@@ -1,0 +1,32 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ArchitectureDecisionRecord",
+    "type": "object",
+    "required": ["id", "title", "status", "context", "decision", "consequences", "created_at"],
+    "additionalProperties": false,
+    "properties": {
+        "id": { "type": "string", "pattern": "^ADR-[0-9]{3,}$" },
+        "title": { "type": "string" },
+        "status": {
+            "type": "string",
+            "enum": ["proposed", "accepted", "deprecated", "superseded"]
+        },
+        "context": { "type": "string" },
+        "options_considered": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["name", "pros", "cons"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "pros": { "type": "array", "items": { "type": "string" } },
+                    "cons": { "type": "array", "items": { "type": "string" } }
+                }
+            }
+        },
+        "decision": { "type": "string" },
+        "consequences": { "type": "string" },
+        "superseded_by": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+    }
+}

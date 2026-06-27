@@ -1,0 +1,24 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ApiContracts",
+    "description": "Structural validation that api-contracts.json is a well-formed OpenAPI 3.x document (SPEC §3.3 / §6). Lenient on the body (it does not re-implement the full OpenAPI meta-schema) but enforces the load-bearing top-level shape downstream agents depend on: an openapi version, info.title/version, and a paths object.",
+    "type": "object",
+    "required": ["openapi", "info", "paths"],
+    "additionalProperties": true,
+    "properties": {
+        "openapi": {
+            "type": "string",
+            "pattern": "^3\\.(0|1)(\\.[0-9]+)?$"
+        },
+        "info": {
+            "type": "object",
+            "required": ["title", "version"],
+            "additionalProperties": true,
+            "properties": {
+                "title": { "type": "string", "minLength": 1 },
+                "version": { "type": "string", "minLength": 1 }
+            }
+        },
+        "paths": { "type": "object" }
+    }
+}
