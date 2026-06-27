@@ -618,7 +618,7 @@
                     "timezone_score": 0.78,
                     "growth_score": 0.79
                   },
-                  "weights_snapshot": { "w1": 0.30, "w2": 0.25, "w3": 0.20, "w4": 0.10, "w5": 0.15 },
+                  "weights_snapshot": { "w1": 0.30, "w2": 0.25, "w3": 0.20, "w4": 0.15, "w5": 0.10 },
                   "vector_search_degraded": false,
                   "behavioral_data_unavailable": false,
                   "created_at": "2026-06-26T10:00:00Z"
@@ -828,8 +828,8 @@
                   "w1": 0.30,
                   "w2": 0.25,
                   "w3": 0.20,
-                  "w4": 0.10,
-                  "w5": 0.15,
+                  "w4": 0.15,
+                  "w5": 0.10,
                   "version": 3,
                   "updated_at": "2026-06-26T09:00:00Z"
                 }

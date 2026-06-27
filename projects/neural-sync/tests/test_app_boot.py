@@ -14,13 +14,35 @@ def test_app_imports_without_error():
 
 
 def test_both_204_delete_routes_registered():
-    """Both GDPR/erasure-class DELETE routes must be registered and 204."""
+    """Both GDPR/erasure-class DELETE routes must be registered and 204.
+
+    FastAPI 0.111 stores include_router results as _IncludedRouter objects.
+    Each has original_router.routes with the actual APIRoute entries and the
+    include_context.prefix for the path prefix. We walk them to find DELETE routes.
+    """
+    from fastapi.routing import APIRoute
     from src.main import app
-    deletes = {
-        r.path: r for r in app.routes
-        if "DELETE" in getattr(r, "methods", set())
-    }
-    assert "/api/v1/developers/{developer_id}" in deletes
+
+    def collect_routes(routes, prefix="", collected=None):
+        if collected is None:
+            collected = {}
+        for r in routes:
+            if isinstance(r, APIRoute):
+                full_path = prefix + r.path
+                if "DELETE" in (r.methods or set()):
+                    collected[full_path] = r
+            # FastAPI 0.111+: _IncludedRouter with original_router + include_context
+            elif hasattr(r, "original_router") and hasattr(r, "include_context"):
+                sub_prefix = getattr(r.include_context, "prefix", "")
+                collect_routes(r.original_router.routes, sub_prefix, collected)
+            elif hasattr(r, "routes"):
+                collect_routes(r.routes, prefix, collected)
+        return collected
+
+    deletes = collect_routes(app.routes)
+    assert "/api/v1/developers/{developer_id}" in deletes, (
+        f"DELETE /api/v1/developers/{{developer_id}} not found. Found: {list(deletes.keys())}"
+    )
     assert "/api/v1/projects/{project_id}" in deletes
     assert deletes["/api/v1/developers/{developer_id}"].status_code == 204
     assert deletes["/api/v1/projects/{project_id}"].status_code == 204

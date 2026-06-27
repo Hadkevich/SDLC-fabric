@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: neuralsync
+      POSTGRES_PASSWORD: neuralsync
+      POSTGRES_DB: neuralsync
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neuralsync -d neuralsync"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    ports:
+      - "8000:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://neuralsync:neuralsync@postgres:5432/neuralsync
+      DATABASE_URL_SYNC: postgresql://neuralsync:neuralsync@postgres:5432/neuralsync
+      NEURAL_SYNC_JWT_SECRET: demo-secret-neural-sync-2026
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DEBUG: "true"
+      ALLOWED_ORIGINS: http://localhost:5173
+      COOKIE_SECURE: "false"
+      COOKIE_SAMESITE: strict
+      PYTHONPATH: /app
+    command: >
+      sh -c "alembic upgrade head && uvicorn src.main:app --host 0.0.0.0 --port 8080 --reload"
+    volumes:
+      - .:/app
+
+  frontend:
+    image: node:20-slim
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+
+volumes:
+  postgres_data:

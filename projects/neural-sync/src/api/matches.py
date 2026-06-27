@@ -125,6 +125,7 @@ class MatchResponse(BaseModel):
     match_id: uuid.UUID
     developer_id: uuid.UUID
     project_id: uuid.UUID
+    project_name: str = "Project"
     match_score: float
     explanation: str
     explanation_source: str
@@ -242,11 +243,12 @@ async def _get_or_create_project(
     return proj
 
 
-def _match_record_to_response(record: MatchRecord) -> MatchRecordResponse:
+def _match_record_to_response(record: MatchRecord, project_name: str = "Project") -> MatchRecordResponse:
     return MatchRecordResponse(
         match_id=record.id,
         developer_id=record.developer_id,
         project_id=record.project_id,
+        project_name=project_name,
         match_score=record.match_score,
         explanation=record.explanation,
         explanation_source=record.explanation_source,
@@ -536,7 +538,7 @@ async def get_match(
         raise HTTPException(status_code=404, detail=f"Match {match_id} not found")
 
     # Developers may only view their own matches
-    if current_user.role == "developer" and str(record.developer_id) != current_user.user_id:
+    if current_user.role == "developer" and str(record.developer_id) != current_user.developer_profile_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     return _match_record_to_response(record)
@@ -545,6 +547,7 @@ async def get_match(
 @router.get("/{match_id}/explanation", response_model=ExplanationResponse)
 async def get_match_explanation(
     match_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> ExplanationResponse:
@@ -555,8 +558,43 @@ async def get_match_explanation(
     if record is None:
         raise HTTPException(status_code=404, detail=f"Match {match_id} not found")
 
-    if current_user.role == "developer" and str(record.developer_id) != current_user.user_id:
+    if current_user.role == "developer" and str(record.developer_id) != current_user.developer_profile_id:
         raise HTTPException(status_code=403, detail="Forbidden")
+
+    # Trigger async LLM generation if still pending (e.g. seeded matches)
+    if record.explanation_source == "stub_pending":
+        try:
+            dev_result = await db.execute(
+                select(DeveloperProfile).where(DeveloperProfile.id == record.developer_id)
+            )
+            dev = dev_result.scalar_one_or_none()
+            proj_result = await db.execute(
+                select(ProjectProfile).where(ProjectProfile.id == record.project_id)
+            )
+            proj = proj_result.scalar_one_or_none()
+            if dev and proj:
+                claude_context = ClaudeService.build_prompt_context(
+                    skill_score=record.skill_score,
+                    workstyle_score=record.workstyle_score,
+                    motivation_score=record.motivation_score,
+                    timezone_score=record.timezone_score,
+                    growth_score=record.growth_score,
+                    match_score=record.match_score,
+                    developer_career_goals=dev.career_goals,
+                    project_growth_opportunities=proj.growth_opportunities,
+                    developer_experience_years=dev.experience_years,
+                    project_name=proj.name or "Project",
+                    developer_timezone=dev.timezone,
+                    project_timezone_overlap=proj.timezone_overlap_required,
+                )
+                background_tasks.add_task(
+                    _async_generate_explanation,
+                    record.id,
+                    claude_context,
+                    settings.database_url,
+                )
+        except Exception as exc:
+            logger.warning("Could not enqueue explanation generation for %s: %s", match_id, exc)
 
     return ExplanationResponse(
         match_id=record.id,

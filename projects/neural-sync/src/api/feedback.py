@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy.orm import selectinload
+
 from src.core.auth import TokenPayload, get_current_user
 from src.db.models import (
     AllocationRecord,
@@ -24,8 +26,10 @@ from src.db.models import (
     ErasureAuditLog,
     FeedbackRecord,
     MatchRecord,
+    UserAccount,
 )
 from src.db.session import get_db
+from src.engine.risk import AllocationSlice, compute_risk_scores
 
 router = APIRouter(tags=["matches", "admin", "risk"])
 
@@ -71,6 +75,7 @@ class ErasureAuditRecord(BaseModel):
 
 class TeamRiskMember(BaseModel):
     developer_id: uuid.UUID
+    display_name: str
     burnout_risk_score: float
     bench_risk_score: float
     burnout_risk_badge: str
@@ -108,7 +113,7 @@ async def submit_feedback(
     Store a FeedbackRecord. developer_id must match the authenticated user's JWT sub.
     Rejection counts accumulate for GET /analytics/rejection-rate.
     """
-    if current_user.user_id != str(payload.developer_id):
+    if current_user.developer_profile_id != str(payload.developer_id):
         raise HTTPException(status_code=403, detail="developer_id must match authenticated user")
 
     # Verify match exists
@@ -225,27 +230,84 @@ async def refresh_risk_scores(
 # GET /teams/{team_id}/risk-summary  (manager only, no raw vectors — AC8)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/teams/{team_id}/risk-summary")
+@router.get("/teams/{team_id}/risk-summary", response_model=TeamRiskSummary)
 async def get_team_risk_summary(
     team_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
-) -> None:
+) -> TeamRiskSummary:
     """
-    Team-scoped risk summary.
+    Team risk summary — per-developer burnout and bench risk badges (AC8).
 
-    Phase 1 does not implement a Team entity in the data model, so this
-    endpoint cannot safely scope results to the requested team_id.
-    The previous implementation silently ignored team_id and returned
-    unrelated developer data — a correctness/security defect (BLK-002).
-
-    Returns HTTP 501 until a Team entity and team membership are added in
-    Phase 2.
+    Phase 1 fallback: no Team entity exists, so all DeveloperProfile records are
+    returned (scoping by team_id is deferred to Phase 2). Raw behavioral vectors
+    are never included in the response.
     """
     if current_user.role != "manager":
         raise HTTPException(status_code=403, detail="Manager role required")
 
-    raise HTTPException(
-        status_code=501,
-        detail="Team-scoped risk summary is not implemented in Phase 1 (no Team entity in the data model)",
+    # Load all developer profiles with their allocation records in one query
+    result = await db.execute(
+        select(DeveloperProfile).options(selectinload(DeveloperProfile.allocation_records))
+    )
+    profiles = result.scalars().all()
+
+    # Build profile_id → username map from user accounts
+    ua_result = await db.execute(
+        select(UserAccount.developer_profile_id, UserAccount.username).where(
+            UserAccount.developer_profile_id.isnot(None)
+        )
+    )
+    profile_to_username: dict[uuid.UUID, str] = {
+        row[0]: row[1] for row in ua_result.all()
+    }
+
+    members: list[TeamRiskMember] = []
+    dist = TeamRiskDistribution()
+
+    for i, dev in enumerate(profiles):
+        slices = [
+            AllocationSlice(
+                start_date=a.start_date,
+                end_date=a.end_date,
+                workload_intensity=a.workload_intensity,
+                is_active=a.is_active,
+            )
+            for a in (dev.allocation_records or [])
+        ]
+        scores = compute_risk_scores(slices)
+
+        display_name = profile_to_username.get(dev.id) or f"Developer #{i + 1}"
+        members.append(
+            TeamRiskMember(
+                developer_id=dev.id,
+                display_name=display_name,
+                burnout_risk_score=scores.burnout_risk_score,
+                bench_risk_score=scores.bench_risk_score,
+                burnout_risk_badge=scores.burnout_risk_badge,
+                bench_risk_badge=scores.bench_risk_badge,
+            )
+        )
+
+        # Accumulate distribution counts
+        if scores.burnout_risk_badge == "high":
+            dist.burnout_high_count += 1
+        elif scores.burnout_risk_badge == "medium":
+            dist.burnout_medium_count += 1
+        else:
+            dist.burnout_low_count += 1
+
+        if scores.bench_risk_badge == "high":
+            dist.bench_high_count += 1
+        elif scores.bench_risk_badge == "medium":
+            dist.bench_medium_count += 1
+        else:
+            dist.bench_low_count += 1
+
+    return TeamRiskSummary(
+        team_id=team_id,
+        member_count=len(members),
+        members=members,
+        risk_distribution=dist,
+        computed_at=datetime.now(timezone.utc),
     )

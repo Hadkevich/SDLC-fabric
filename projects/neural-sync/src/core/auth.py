@@ -32,15 +32,17 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(user_id: str, role: str) -> str:
+def create_access_token(user_id: str, role: str, developer_profile_id: Optional[str] = None) -> str:
     now = datetime.now(timezone.utc)
-    payload = {
+    payload: dict = {
         "sub": user_id,
         "role": role,
         "type": "access",
         "iat": now,
         "exp": now + timedelta(seconds=settings.jwt_access_token_ttl_seconds),
     }
+    if developer_profile_id is not None:
+        payload["dev_profile_id"] = developer_profile_id
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -96,9 +98,10 @@ def decode_access_token(token: str) -> dict:
 
 
 class TokenPayload:
-    def __init__(self, sub: str, role: str):
+    def __init__(self, sub: str, role: str, developer_profile_id: Optional[str] = None):
         self.user_id = sub
         self.role = role
+        self.developer_profile_id = developer_profile_id
 
 
 async def get_current_user(
@@ -107,7 +110,11 @@ async def get_current_user(
     if not credentials:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authentication token")
     payload = decode_access_token(credentials.credentials)
-    return TokenPayload(sub=payload["sub"], role=payload["role"])
+    return TokenPayload(
+        sub=payload["sub"],
+        role=payload["role"],
+        developer_profile_id=payload.get("dev_profile_id"),
+    )
 
 
 async def require_manager(current_user: TokenPayload = Depends(get_current_user)) -> TokenPayload:
@@ -124,6 +131,10 @@ async def get_optional_user(
         return None
     try:
         payload = decode_access_token(credentials.credentials)
-        return TokenPayload(sub=payload["sub"], role=payload["role"])
+        return TokenPayload(
+            sub=payload["sub"],
+            role=payload["role"],
+            developer_profile_id=payload.get("dev_profile_id"),
+        )
     except HTTPException:
         return None

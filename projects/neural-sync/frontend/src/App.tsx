@@ -17,9 +17,12 @@
 import { useState } from 'react';
 import type { CSSProperties, FormEvent } from 'react';
 import type { LoginResponse } from './api/client';
-import { login, setAccessToken } from './api/client';
+import { login, logout, setAccessToken } from './api/client';
 import { DeveloperDashboard } from './pages/DeveloperDashboard';
 import { ManagerDashboard } from './pages/ManagerDashboard';
+import { WeightConfigPage } from './pages/WeightConfigPage';
+
+type ManagerTab = 'risk' | 'weights';
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
 
@@ -260,16 +263,22 @@ function NavBar({ role, onLogout, onSwitchTeam }: NavBarProps) {
 
 export default function App() {
   const [session, setSession] = useState<LoginResponse | null>(null);
-  const [teamId, setTeamId] = useState<string | null>(null);
+  const [teamId] = useState<string>('00000000-0000-0000-0000-000000000001');
+  const [managerTab, setManagerTab] = useState<ManagerTab>('risk');
 
   const handleLoginSuccess = (resp: LoginResponse) => {
     setSession(resp);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch {
+      // best-effort: clear client state regardless
+    }
     setAccessToken(null);
     setSession(null);
-    setTeamId(null);
+    setManagerTab('risk');
   };
 
   // ── Unauthenticated → show login form ──
@@ -279,26 +288,75 @@ export default function App() {
 
   // ── Developer role → Developer Dashboard (AC7) ──
   if (session.role === 'developer') {
+    const devId = session.developer_profile_id ?? session.user_id;
     return (
       <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb' }}>
-        <NavBar role="developer" onLogout={handleLogout} />
-        <DeveloperDashboard developerId={session.user_id} />
+        <NavBar role="developer" onLogout={() => void handleLogout()} />
+        <DeveloperDashboard developerId={devId} />
       </div>
     );
   }
 
-  // ── Manager role → Team selector → Manager Dashboard (AC8) ──
+  // ── Manager role → tabbed view: Team Risk | Weight Config ──
+  const tabBtnStyle = (active: boolean): CSSProperties => ({
+    padding: '4px 14px',
+    backgroundColor: active ? '#ffffff' : 'transparent',
+    color: active ? '#1d4ed8' : '#bfdbfe',
+    border: active ? '1px solid #93c5fd' : '1px solid transparent',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '0.8rem',
+    fontWeight: 600,
+  });
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb' }}>
-      <NavBar
-        role="manager"
-        onLogout={handleLogout}
-        onSwitchTeam={teamId !== null ? () => setTeamId(null) : undefined}
-      />
-      {teamId === null ? (
-        <TeamSelector onSelect={setTeamId} />
-      ) : (
+      {/* Nav with inline tabs */}
+      <nav
+        style={{
+          backgroundColor: '#1d4ed8',
+          padding: '10px 24px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+        }}
+      >
+        <span style={{ color: '#ffffff', fontWeight: 800, fontSize: '0.95rem', letterSpacing: '0.05em' }}>
+          NEURAL SYNC
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button onClick={() => setManagerTab('risk')} style={tabBtnStyle(managerTab === 'risk')}>
+            Team Risk
+          </button>
+          <button onClick={() => setManagerTab('weights')} style={tabBtnStyle(managerTab === 'weights')}>
+            Weight Config
+          </button>
+          <span style={{ color: '#93c5fd', fontSize: '0.8rem', fontWeight: 600, marginLeft: '8px' }}>
+            ⚙ Manager
+          </span>
+          <button
+            onClick={() => void handleLogout()}
+            style={{
+              color: '#bfdbfe',
+              background: 'none',
+              border: '1px solid #93c5fd',
+              borderRadius: '6px',
+              padding: '4px 12px',
+              cursor: 'pointer',
+              fontSize: '0.8rem',
+              fontWeight: 600,
+            }}
+          >
+            Sign Out
+          </button>
+        </div>
+      </nav>
+
+      {managerTab === 'risk' ? (
         <ManagerDashboard teamId={teamId} />
+      ) : (
+        <WeightConfigPage />
       )}
     </div>
   );

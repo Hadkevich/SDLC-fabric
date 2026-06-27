@@ -38,9 +38,10 @@ class LoginResponse(BaseModel):
     expires_in: int = 3600
     user_id: uuid.UUID
     role: str
+    developer_profile_id: Optional[uuid.UUID] = None
 
 
-def _set_refresh_cookie(response: Response, user_id: str, role: str) -> None:
+def _set_refresh_cookie(response: Response, user_id: str, role: str, developer_profile_id: Optional[str] = None) -> None:
     response.set_cookie(
         key=_REFRESH_COOKIE,
         value=create_refresh_token(user_id, role),
@@ -67,13 +68,27 @@ async def login(
     if not user.is_active:
         raise HTTPException(status_code=401, detail="Account is inactive")
 
+    dev_profile_id = str(user.developer_profile_id) if user.developer_profile_id else None
     _set_refresh_cookie(response, str(user.id), user.role)
     return LoginResponse(
-        access_token=create_access_token(str(user.id), user.role),
+        access_token=create_access_token(str(user.id), user.role, dev_profile_id),
         token_type="bearer",
         expires_in=settings.jwt_access_token_ttl_seconds,
         user_id=user.id,
         role=user.role,
+        developer_profile_id=user.developer_profile_id,
+    )
+
+
+@router.post("/logout", status_code=204, response_model=None)
+async def logout(response: Response) -> None:
+    """Clear the HttpOnly refresh-token cookie server-side on sign-out."""
+    response.delete_cookie(
+        key=_REFRESH_COOKIE,
+        httponly=True,
+        samesite=settings.cookie_samesite,
+        secure=settings.cookie_secure,
+        path=_COOKIE_PATH,
     )
 
 

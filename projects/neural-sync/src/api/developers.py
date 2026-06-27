@@ -20,7 +20,7 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select, delete
+from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.auth import TokenPayload, get_current_user, require_manager
@@ -31,10 +31,19 @@ from src.db.models import (
     ExplanationCache,
     FeedbackRecord,
     MatchRecord,
+    ProjectProfile,
     UserAccount,
 )
 from src.db.session import get_db
 from src.engine.risk import AllocationSlice, compute_risk_scores
+from src.engine.matching import (
+    compute_skill_score,
+    compute_workstyle_score,
+    compute_motivation_score,
+    compute_timezone_score,
+    compute_growth_score,
+    compute_match_score,
+)
 
 router = APIRouter(prefix="/developers", tags=["developers"])
 
@@ -102,6 +111,26 @@ class RiskResponse(BaseModel):
     computed_at: datetime
 
 
+class SuggestedProjectMove(BaseModel):
+    project_id: uuid.UUID
+    project_name: str
+    match_score: float
+    component_scores: dict
+    action_type: str
+    rationale: str
+    projected_burnout_after_move: float
+
+
+class ReallocationSuggestionResponse(BaseModel):
+    developer_id: uuid.UUID
+    trigger: str
+    current_burnout_score: float
+    current_bench_score: float
+    current_burnout_badge: str
+    current_bench_badge: str
+    suggestion: Optional[SuggestedProjectMove]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -124,25 +153,63 @@ def _profile_to_response(dev: DeveloperProfile) -> DeveloperProfileResponse:
     )
 
 
-async def _enqueue_embeddings(dev: DeveloperProfile) -> None:
-    """Schedule background embedding generation for the developer profile."""
+async def _enqueue_embeddings(dev_id: uuid.UUID, dev_data: dict) -> None:
+    """Generate embeddings and persist them; update embedding_status on the profile."""
+    from src.db.models import DeveloperEmbedding
+    from src.db.session import AsyncSessionLocal
     from src.engine.embeddings import generate_developer_embeddings
-    # In production this would be dispatched to an async worker queue.
-    # For Phase 1, we call directly (fire-and-forget pattern shown here).
+
     try:
         vecs = generate_developer_embeddings(
-            developer_id=str(dev.id),
-            skills=dev.skills or [],
-            preferred_stack=dev.preferred_stack or [],
-            experience_years=dev.experience_years,
-            project_history=dev.project_history or [],
-            work_style_vector=dev.work_style_vector or [],
-            motivation_vector=dev.motivation_vector or [],
-            career_goals=dev.career_goals or [],
+            developer_id=str(dev_id),
+            skills=dev_data["skills"],
+            preferred_stack=dev_data["preferred_stack"],
+            experience_years=dev_data["experience_years"],
+            project_history=dev_data["project_history"],
+            work_style_vector=dev_data["work_style_vector"],
+            motivation_vector=dev_data["motivation_vector"],
+            career_goals=dev_data["career_goals"],
         )
-        return vecs
     except Exception:
-        return None
+        vecs = None
+
+    async with AsyncSessionLocal() as session:
+        try:
+            profile = await session.get(DeveloperProfile, dev_id)
+            if profile is None:
+                return
+
+            if vecs:
+                for emb_type, vector in vecs.items():
+                    if not vector:
+                        continue
+                    existing = await session.execute(
+                        select(DeveloperEmbedding).where(
+                            DeveloperEmbedding.developer_id == dev_id,
+                            DeveloperEmbedding.embedding_type == emb_type,
+                        )
+                    )
+                    row = existing.scalar_one_or_none()
+                    if row:
+                        row.vector = vector
+                        row.updated_at = datetime.now(timezone.utc)
+                    else:
+                        session.add(
+                            DeveloperEmbedding(
+                                developer_id=dev_id,
+                                embedding_type=emb_type,
+                                vector=vector,
+                                model_name="auto",
+                                model_version="1",
+                            )
+                        )
+                profile.embedding_status = "ready"
+            else:
+                profile.embedding_status = "failed"
+
+            await session.commit()
+        except Exception:
+            await session.rollback()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -179,7 +246,16 @@ async def create_developer(
     db.add(dev)
     await db.flush()
 
-    background_tasks.add_task(_enqueue_embeddings, dev)
+    dev_data = {
+        "skills": dev.skills or [],
+        "preferred_stack": dev.preferred_stack or [],
+        "experience_years": dev.experience_years,
+        "project_history": dev.project_history or [],
+        "work_style_vector": dev.work_style_vector or [],
+        "motivation_vector": dev.motivation_vector or [],
+        "career_goals": dev.career_goals or [],
+    }
+    background_tasks.add_task(_enqueue_embeddings, dev.id, dev_data)
     return _profile_to_response(dev)
 
 
@@ -229,7 +305,16 @@ async def update_developer(
     dev.updated_at = datetime.now(timezone.utc)
 
     await db.flush()
-    background_tasks.add_task(_enqueue_embeddings, dev)
+    dev_data = {
+        "skills": dev.skills or [],
+        "preferred_stack": dev.preferred_stack or [],
+        "experience_years": dev.experience_years,
+        "project_history": dev.project_history or [],
+        "work_style_vector": dev.work_style_vector or [],
+        "motivation_vector": dev.motivation_vector or [],
+        "career_goals": dev.career_goals or [],
+    }
+    background_tasks.add_task(_enqueue_embeddings, dev.id, dev_data)
     return _profile_to_response(dev)
 
 
@@ -387,7 +472,7 @@ async def get_developer_matches(
     if dev is None:
         raise HTTPException(status_code=404, detail=f"Developer {developer_id} not found")
 
-    if current_user.role == "developer" and current_user.user_id != str(developer_id):
+    if current_user.role == "developer" and current_user.developer_profile_id != str(developer_id):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     query = (
@@ -398,18 +483,215 @@ async def get_developer_matches(
     if min_score is not None:
         query = query.where(MatchRecord.match_score >= min_score)
 
-    total_result = await db.execute(
-        select(MatchRecord).where(MatchRecord.developer_id == developer_id)
+    count_stmt = select(func.count()).select_from(MatchRecord).where(
+        MatchRecord.developer_id == developer_id,
+        *(
+            [MatchRecord.match_score >= min_score]
+            if min_score is not None
+            else []
+        ),
     )
-    total = len(total_result.scalars().all())
+    count_raw = (await db.execute(count_stmt)).scalar()
+    total = int(count_raw) if count_raw is not None else 0
 
     query = query.limit(top_k)
     result = await db.execute(query)
     records = result.scalars().all()
 
+    # Load project names in one query
+    project_ids = list({r.project_id for r in records})
+    proj_result = await db.execute(
+        select(ProjectProfile).where(ProjectProfile.id.in_(project_ids))
+    )
+    project_name_map = {p.id: (p.name or "Project") for p in proj_result.scalars().all()}
+
     from src.api.matches import _match_record_to_response, DeveloperMatchesResponse
     return DeveloperMatchesResponse(
         developer_id=developer_id,
-        matches=[_match_record_to_response(r) for r in records],
+        matches=[
+            _match_record_to_response(r, project_name=project_name_map.get(r.project_id, "Project"))
+            for r in records
+        ],
         total=total,
+    )
+
+
+@router.get("/{developer_id}/reallocation-suggestion", response_model=ReallocationSuggestionResponse)
+async def get_reallocation_suggestion(
+    developer_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+) -> ReallocationSuggestionResponse:
+    """
+    Example D from idea-brief: when burnout > 0.6 or bench > 0.7, find the
+    best bridge project via the deterministic matching engine and return a
+    structured reallocation proposal. Human (manager) confirms — system suggests.
+    """
+    if current_user.role == "developer" and current_user.developer_profile_id != str(developer_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    dev = await db.get(DeveloperProfile, developer_id)
+    if dev is None:
+        raise HTTPException(status_code=404, detail=f"Developer {developer_id} not found")
+
+    # Compute current risk
+    alloc_result = await db.execute(
+        select(AllocationRecord).where(AllocationRecord.developer_id == developer_id)
+    )
+    alloc_rows = alloc_result.scalars().all()
+    slices = [
+        AllocationSlice(
+            start_date=a.start_date,
+            end_date=a.end_date,
+            workload_intensity=a.workload_intensity,
+            is_active=a.is_active,
+        )
+        for a in alloc_rows
+    ]
+    scores = compute_risk_scores(slices)
+
+    trigger = "none"
+    if scores.burnout_risk_score > 0.6:
+        trigger = "burnout"
+    elif scores.bench_risk_score > 0.7:
+        trigger = "bench"
+
+    if trigger == "none":
+        return ReallocationSuggestionResponse(
+            developer_id=developer_id,
+            trigger="none",
+            current_burnout_score=scores.burnout_risk_score,
+            current_bench_score=scores.bench_risk_score,
+            current_burnout_badge=scores.burnout_risk_badge,
+            current_bench_badge=scores.bench_risk_badge,
+            suggestion=None,
+        )
+
+    # Load current weights
+    from src.db.models import WeightConfig as WeightConfigModel
+    weights_result = await db.execute(
+        select(WeightConfigModel).order_by(WeightConfigModel.version.desc()).limit(1)
+    )
+    weights = weights_result.scalar_one_or_none()
+    w1 = weights.w1_skill if weights else 0.30
+    w2 = weights.w2_workstyle if weights else 0.25
+    w3 = weights.w3_motivation if weights else 0.20
+    w4 = weights.w4_timezone if weights else 0.15
+    w5 = weights.w5_growth if weights else 0.10
+
+    # Load candidate projects (lower intensity for burnout cases)
+    proj_query = select(ProjectProfile)
+    if trigger == "burnout":
+        proj_query = proj_query.where(ProjectProfile.workload_intensity <= 0.6)
+    proj_result = await db.execute(proj_query.limit(50))
+    projects = proj_result.scalars().all()
+
+    if not projects:
+        proj_result = await db.execute(select(ProjectProfile).limit(50))
+        projects = proj_result.scalars().all()
+
+    # Score each candidate project using the deterministic matching engine
+    best_score = -1.0
+    best_project = None
+    best_components: dict = {}
+
+    for proj in projects:
+        skill_score = compute_skill_score(
+            developer_skills=dev.skills or [],
+            required_skills=proj.required_skills or [],
+            experience_years=dev.experience_years,
+        )
+        workstyle_score = compute_workstyle_score(
+            dev_work_style=dev.work_style_vector or [0.5] * 8,
+            team_structure=proj.team_structure or "",
+            workload_intensity=proj.workload_intensity,
+            innovation_level=proj.innovation_level,
+        )
+        motivation_score = compute_motivation_score(
+            dev_motivation_vector=dev.motivation_vector or [0.5] * 8,
+            innovation_level=proj.innovation_level,
+            growth_opportunities=proj.growth_opportunities or [],
+            workload_intensity=proj.workload_intensity,
+        )
+        timezone_score = compute_timezone_score(
+            dev_timezone=dev.timezone or "UTC+0",
+            project_timezone_overlap=proj.timezone_overlap_required or "UTC+0..UTC+3",
+        )
+        growth_score = compute_growth_score(
+            career_goals=dev.career_goals or [],
+            growth_opportunities=proj.growth_opportunities or [],
+        )
+        match_score = compute_match_score(
+            w1=w1, w2=w2, w3=w3, w4=w4, w5=w5,
+            skill_score=skill_score,
+            workstyle_score=workstyle_score,
+            motivation_score=motivation_score,
+            timezone_score=timezone_score,
+            growth_score=growth_score,
+        )
+        if match_score > best_score:
+            best_score = match_score
+            best_project = proj
+            best_components = {
+                "skill_score": skill_score,
+                "workstyle_score": workstyle_score,
+                "motivation_score": motivation_score,
+                "timezone_score": timezone_score,
+                "growth_score": growth_score,
+            }
+
+    if best_project is None:
+        return ReallocationSuggestionResponse(
+            developer_id=developer_id,
+            trigger=trigger,
+            current_burnout_score=scores.burnout_risk_score,
+            current_bench_score=scores.bench_risk_score,
+            current_burnout_badge=scores.burnout_risk_badge,
+            current_bench_badge=scores.bench_risk_badge,
+            suggestion=None,
+        )
+
+    # Project burnout after move to lower-intensity project
+    projected_burnout = round(
+        min(1.0, scores.burnout_risk_score * (best_project.workload_intensity / 0.9)), 6
+    )
+
+    # Determine action type
+    dev_skills_lower = {s.lower() for s in (dev.skills or [])}
+    proj_skills_lower = {s.lower() for s in (best_project.required_skills or [])}
+    overlap = dev_skills_lower & proj_skills_lower
+    action_type = "bench-fill" if trigger == "bench" else (
+        "skill-bridge" if len(overlap) < len(proj_skills_lower) * 0.7 else "lateral-move"
+    )
+
+    if trigger == "burnout":
+        rationale = (
+            f"Reduces workload intensity from current high level to "
+            f"{best_project.workload_intensity:.1f} — projected burnout drops "
+            f"from {scores.burnout_risk_score:.2f} to {projected_burnout:.2f}. "
+            f"Match score {best_score:.2f} ensures alignment is maintained."
+        )
+    else:
+        rationale = (
+            f"Developer is currently benched (bench risk {scores.bench_risk_score:.2f}). "
+            f"Project '{best_project.name or 'Project'}' provides immediate engagement "
+            f"with a {best_score:.2f} compatibility score."
+        )
+
+    return ReallocationSuggestionResponse(
+        developer_id=developer_id,
+        trigger=trigger,
+        current_burnout_score=scores.burnout_risk_score,
+        current_bench_score=scores.bench_risk_score,
+        current_burnout_badge=scores.burnout_risk_badge,
+        current_bench_badge=scores.bench_risk_badge,
+        suggestion=SuggestedProjectMove(
+            project_id=best_project.id,
+            project_name=best_project.name or "Project",
+            match_score=best_score,
+            component_scores=best_components,
+            action_type=action_type,
+            rationale=rationale,
+            projected_burnout_after_move=projected_burnout,
+        ),
     )

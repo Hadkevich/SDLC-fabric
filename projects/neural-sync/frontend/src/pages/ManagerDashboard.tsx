@@ -19,8 +19,8 @@
 
 import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
-import type { TeamRiskDistribution, TeamRiskMember, TeamRiskSummary } from '../api/client';
-import { getTeamRiskSummary } from '../api/client';
+import type { TeamRiskDistribution, TeamRiskMember, TeamRiskSummary, ReallocationSuggestion } from '../api/client';
+import { getTeamRiskSummary, getReallocationSuggestion } from '../api/client';
 import { RiskBadge } from '../components/RiskBadge';
 
 // ─── Props ─────────────────────────────────────────────────────────────────────
@@ -93,6 +93,98 @@ function MetricCard({ label, value, accentColor, testId }: MetricCardProps) {
   );
 }
 
+// ─── Reallocation modal ────────────────────────────────────────────────────────
+
+interface ReallocationModalProps {
+  suggestion: ReallocationSuggestion;
+  onClose: () => void;
+}
+
+function ReallocationModal({ suggestion, onClose }: ReallocationModalProps) {
+  const s = suggestion.suggestion;
+  const overlayStyle: CSSProperties = {
+    position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+  };
+  const boxStyle: CSSProperties = {
+    backgroundColor: '#fff', borderRadius: '12px', padding: '28px',
+    maxWidth: '520px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+  };
+  return (
+    <div style={overlayStyle} onClick={onClose}>
+      <div style={boxStyle} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, color: '#111827' }}>
+            ⚡ Reallocation Suggestion
+          </h2>
+          <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '1.2rem', color: '#6b7280' }}>✕</button>
+        </div>
+
+        <div style={{ marginBottom: '16px', padding: '12px', backgroundColor: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px' }}>
+          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#991b1b', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Current Risk — {suggestion.trigger === 'burnout' ? '🔥 Burnout' : '🪑 Bench'}
+          </div>
+          <div style={{ display: 'flex', gap: '16px', fontSize: '0.85rem' }}>
+            <span>Burnout: <strong>{(suggestion.current_burnout_score * 100).toFixed(0)}%</strong> ({suggestion.current_burnout_badge})</span>
+            <span>Bench: <strong>{(suggestion.current_bench_score * 100).toFixed(0)}%</strong> ({suggestion.current_bench_badge})</span>
+          </div>
+        </div>
+
+        {s ? (
+          <>
+            <div style={{ marginBottom: '16px', padding: '14px', backgroundColor: '#f0fdf4', border: '1px solid #86efac', borderRadius: '8px' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#15803d', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Suggested Project — {s.action_type.replace('-', ' ')}
+              </div>
+              <div style={{ fontWeight: 700, fontSize: '1rem', color: '#111827', marginBottom: '4px' }}>{s.project_name}</div>
+              <div style={{ fontSize: '0.85rem', color: '#374151', marginBottom: '10px' }}>
+                Match score: <strong style={{ color: '#1d4ed8' }}>{(s.match_score * 100).toFixed(1)}%</strong>
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#374151', lineHeight: 1.5 }}>{s.rationale}</div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280', marginBottom: '8px' }}>Score Breakdown</div>
+              {Object.entries(s.component_scores).map(([key, value]) => {
+                const label = key.replace('_score', '').replace('workstyle', 'Work Style').replace(/^\w/, c => c.toUpperCase());
+                return (
+                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '0.72rem', color: '#6b7280', width: '80px', flexShrink: 0 }}>{label}</span>
+                    <div style={{ flex: 1, height: '6px', backgroundColor: '#f3f4f6', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{ width: `${(value * 100).toFixed(0)}%`, height: '100%', backgroundColor: value >= 0.7 ? '#16a34a' : value >= 0.4 ? '#f59e0b' : '#ef4444', borderRadius: '3px' }} />
+                    </div>
+                    <span style={{ fontSize: '0.72rem', width: '32px', textAlign: 'right' }}>{(value * 100).toFixed(0)}%</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {suggestion.trigger === 'burnout' && (
+              <div style={{ padding: '10px', backgroundColor: '#eff6ff', border: '1px solid #93c5fd', borderRadius: '6px', fontSize: '0.8rem', color: '#1e40af' }}>
+                📉 Projected burnout after move: <strong>{(s.projected_burnout_after_move * 100).toFixed(0)}%</strong>
+                {' '}(from {(suggestion.current_burnout_score * 100).toFixed(0)}%)
+              </div>
+            )}
+          </>
+        ) : (
+          <p style={{ color: '#6b7280', fontSize: '0.875rem' }}>No suitable projects found for reallocation.</p>
+        )}
+
+        <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+          <button onClick={onClose} style={{ padding: '8px 20px', borderRadius: '6px', border: '1px solid #d1d5db', backgroundColor: '#f9fafb', cursor: 'pointer', fontWeight: 600, fontSize: '0.875rem' }}>
+            Dismiss
+          </button>
+          <button onClick={onClose} style={{ padding: '8px 20px', borderRadius: '6px', border: 'none', backgroundColor: '#1d4ed8', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: '0.875rem' }}>
+            ✓ Confirm Move
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Member row ────────────────────────────────────────────────────────────────
+
 interface MemberRowProps {
   /** AC8: only developer_id, badge levels, and numeric risk scores are rendered.
    *  No work_style, motivation_vector, or behavioral dimension data. */
@@ -100,28 +192,70 @@ interface MemberRowProps {
 }
 
 function MemberRow({ member }: MemberRowProps) {
+  const isHighRisk = member.burnout_risk_badge === 'high' || member.bench_risk_badge === 'high';
+  const [suggestion, setSuggestion] = useState<ReallocationSuggestion | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleSuggestMove = async () => {
+    setLoading(true);
+    try {
+      const result = await getReallocationSuggestion(member.developer_id);
+      setSuggestion(result);
+    } catch {
+      // ignore — badge disappears silently
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <tr data-testid={`member-row-${member.developer_id}`}>
-      <td style={tdStyle}>
-        <code style={{ fontSize: '0.78rem', color: '#374151', wordBreak: 'break-all' }}>
-          {member.developer_id}
-        </code>
-      </td>
-      <td style={tdStyle}>
-        <RiskBadge
-          type="burnout"
-          level={member.burnout_risk_badge}
-          score={member.burnout_risk_score}
-        />
-      </td>
-      <td style={tdStyle}>
-        <RiskBadge
-          type="bench"
-          level={member.bench_risk_badge}
-          score={member.bench_risk_score}
-        />
-      </td>
-    </tr>
+    <>
+      {suggestion && (
+        <ReallocationModal suggestion={suggestion} onClose={() => setSuggestion(null)} />
+      )}
+      <tr data-testid={`member-row-${member.developer_id}`}>
+        <td style={tdStyle}>
+          <span style={{ fontSize: '0.875rem', color: '#111827', fontWeight: 500 }}>
+            {member.display_name}
+          </span>
+        </td>
+        <td style={tdStyle}>
+          <RiskBadge
+            type="burnout"
+            level={member.burnout_risk_badge}
+            score={member.burnout_risk_score}
+          />
+        </td>
+        <td style={tdStyle}>
+          <RiskBadge
+            type="bench"
+            level={member.bench_risk_badge}
+            score={member.bench_risk_score}
+          />
+        </td>
+        <td style={tdStyle}>
+          {isHighRisk && (
+            <button
+              onClick={() => void handleSuggestMove()}
+              disabled={loading}
+              style={{
+                display: 'inline-block',
+                padding: '3px 8px',
+                backgroundColor: loading ? '#f3f4f6' : '#fff7ed',
+                border: '1px solid #fdba74',
+                borderRadius: '4px',
+                fontSize: '0.72rem',
+                fontWeight: 600,
+                color: loading ? '#9ca3af' : '#c2410c',
+                cursor: loading ? 'wait' : 'pointer',
+              }}
+            >
+              {loading ? '…' : '⚡ Suggest Move'}
+            </button>
+          )}
+        </td>
+      </tr>
+    </>
   );
 }
 
@@ -323,9 +457,10 @@ export function ManagerDashboard({ teamId }: ManagerDashboardProps) {
             <table data-testid="developer-risk-table" style={tableStyle}>
               <thead>
                 <tr>
-                  <th style={thStyle}>Developer ID</th>
+                  <th style={thStyle}>Developer</th>
                   <th style={thStyle}>Burnout Risk</th>
                   <th style={thStyle}>Bench Risk</th>
+                  <th style={thStyle}>Action</th>
                 </tr>
               </thead>
               <tbody>

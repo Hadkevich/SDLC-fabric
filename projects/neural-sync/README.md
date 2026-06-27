@@ -13,10 +13,11 @@ human-readable explanation **without ever seeing the raw behavioral vectors**.
 - **LLM:** Google Gemini (free tier) by default; provider-swappable via a prompt artifact
 - **Auth:** JWT access token + HttpOnly refresh cookie (ADR-002)
 
-> ⚠️ **Run status:** the recorded pipeline run reached review + QA (77/77 tests pass) but
-> halted at the deploy gate on one blocking defect (**BLK-001**:
-> `GET /teams/{team_id}/risk-summary` returns 501). See `../../EVALUATION.md`. The setup
-> below runs the app locally; that endpoint returns 501 until fixed.
+> ✅ **Run status:** the recorded pipeline run completes end-to-end —
+> 77/77 tests pass, the review gate caught one contract defect (**BLK-001**) which was
+> fixed and re-approved, and deployment passed: `release_report.json` verdict `success`,
+> the app live in a local Docker container with a passing health check. See
+> `../../EVALUATION.md`. The setup below runs the same app locally.
 
 ---
 
@@ -168,7 +169,7 @@ All routes are under the **`/api/v1`** prefix. Auth: Bearer JWT access token unl
 | GET | `/admin/erasure-audit/{developer_id}` | Manager | GDPR erasure compliance log |
 | POST | `/admin/reembed` | Manager | trigger full re-embedding → **202** |
 | POST | `/risk/refresh` | Manager | batch refresh all risk scores → **202** |
-| GET | `/teams/{team_id}/risk-summary` | Manager | ⚠️ returns **501** in the recorded build (BLK-001) |
+| GET | `/teams/{team_id}/risk-summary` | Manager | per-developer burnout/bench risk badges (AC8); BLK-001 resolved |
 
 ### Developers — `src/api/developers.py`
 | Method | Path | Auth | Notes |
@@ -213,8 +214,8 @@ HttpOnly refresh cookie, one silent refresh on 401).
 | Page / role | File | Shows |
 |-------------|------|-------|
 | **Developer** | `pages/DeveloperDashboard.tsx` | recommended projects, match explanations, risks, growth paths; Accept/Reject |
-| **Manager** | `pages/ManagerDashboard.tsx` | team health, per-developer **risk badges** (no raw behavioral vectors) — depends on the 501 endpoint above |
-| **Admin** | *(API only)* | weight tuning + overrides via `/config/weights` — no dedicated page yet |
+| **Manager** | `pages/ManagerDashboard.tsx` | team health, per-developer **risk badges** (no raw behavioral vectors) — backed by `/teams/{id}/risk-summary` (BLK-001 resolved) |
+| **Admin / weights** | `pages/WeightConfigPage.tsx` | weight tuning via `/config/weights` — live as the **Weight Config** tab in the Manager view (`App.tsx`) |
 
 Components: `ProjectCard.tsx` (polls explanation until ready), `RiskBadge.tsx`.
 
@@ -265,8 +266,9 @@ review → test_plan → release) and the event log live under
 [`../../EVALUATION.md`](../../EVALUATION.md).
 
 Because NEURAL SYNC has a browser UI, the pipeline's post-deploy **`e2e_validation`**
-stage applies here: once `devops-agent` serves the built React UI on the same origin as
-the API, the `e2e-agent` would drive that live URL in a real browser via the **Playwright
-MCP** server and emit `e2e_report.json` (`../../SPEC.md` §3.8). The recorded run halted at
-the deploy gate (BLK-001), so this stage was not reached yet — a re-run after the fix
-exercises it.
+stage applies here: with `devops-agent` serving the built React UI alongside the API, the
+`e2e-agent` drives that live URL in a real browser via the **Playwright MCP** server and
+emits `e2e_report.json` (`../../SPEC.md` §3.8). The recorded run now reaches `complete`
+through deployment (`release_report.json` verdict `success`); exercising this browser
+stage end-to-end against the live UI is the immediate next step (see
+`../../EVALUATION.md` → Known limitations).

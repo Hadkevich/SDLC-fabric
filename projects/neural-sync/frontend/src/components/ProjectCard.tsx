@@ -187,11 +187,8 @@ export function ProjectCard({ match, developerId, onFeedbackSubmitted }: Project
       <div style={headerRow}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            Project
+            {match.project_name}
           </h3>
-          <p style={{ margin: '2px 0 0', fontSize: '0.72rem', color: '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {match.project_id}
-          </p>
         </div>
 
         {/* Match score — AC7: visible percentage */}
@@ -229,6 +226,26 @@ export function ProjectCard({ match, developerId, onFeedbackSubmitted }: Project
         >
           {explanation}
         </p>
+      </div>
+
+      {/* ── Component scores breakdown (explainability) ── */}
+      <div>
+        <div style={sectionLabel}>Score Breakdown</div>
+        {([
+          ['Skills', match.component_scores.skill_score],
+          ['Work Style', match.component_scores.workstyle_score],
+          ['Motivation', match.component_scores.motivation_score],
+          ['Timezone', match.component_scores.timezone_score],
+          ['Growth', match.component_scores.growth_score],
+        ] as [string, number][]).map(([label, value]) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+            <span style={{ fontSize: '0.72rem', color: '#6b7280', width: '72px', flexShrink: 0 }}>{label}</span>
+            <div style={{ flex: 1, height: '6px', backgroundColor: '#f3f4f6', borderRadius: '3px', overflow: 'hidden' }}>
+              <div style={{ width: `${(value * 100).toFixed(0)}%`, height: '100%', backgroundColor: value >= 0.7 ? '#16a34a' : value >= 0.4 ? '#f59e0b' : '#ef4444', borderRadius: '3px' }} />
+            </div>
+            <span style={{ fontSize: '0.72rem', color: '#374151', width: '32px', textAlign: 'right' }}>{(value * 100).toFixed(0)}%</span>
+          </div>
+        ))}
       </div>
 
       {/* ── Risk tags ── */}

@@ -43,6 +43,7 @@ export interface LoginResponse {
   expires_in: number;
   user_id: string;
   role: 'developer' | 'manager';
+  developer_profile_id: string | null;
 }
 
 export interface ComponentScores {
@@ -63,6 +64,7 @@ export interface MatchRecord {
   match_id: string;
   developer_id: string;
   project_id: string;
+  project_name: string;
   match_score: number;
   explanation: string;
   explanation_source: ExplanationSource;
@@ -97,6 +99,7 @@ export interface RiskResponse {
 /** Per AC8: contains only risk scores and badge states — no behavioral vectors. */
 export interface TeamRiskMember {
   developer_id: string;
+  display_name: string;
   burnout_risk_score: number;
   bench_risk_score: number;
   burnout_risk_badge: RiskBadgeLevel;
@@ -142,6 +145,35 @@ export interface FeedbackResponse {
   accepted: boolean;
   comment: string | null;
   feedback_timestamp: string;
+}
+
+export interface WeightConfig {
+  w1: number;
+  w2: number;
+  w3: number;
+  w4: number;
+  w5: number;
+  version: number;
+}
+
+export interface SuggestedProjectMove {
+  project_id: string;
+  project_name: string;
+  match_score: number;
+  component_scores: Record<string, number>;
+  action_type: string;
+  rationale: string;
+  projected_burnout_after_move: number;
+}
+
+export interface ReallocationSuggestion {
+  developer_id: string;
+  trigger: 'burnout' | 'bench' | 'none';
+  current_burnout_score: number;
+  current_bench_score: number;
+  current_burnout_badge: RiskBadgeLevel;
+  current_bench_badge: RiskBadgeLevel;
+  suggestion: SuggestedProjectMove | null;
 }
 
 export interface ApiError {
@@ -251,6 +283,14 @@ export async function login(credentials: LoginRequest): Promise<LoginResponse> {
 }
 
 /**
+ * POST /auth/logout
+ * Clears the HttpOnly refresh_token cookie server-side.
+ */
+export async function logout(): Promise<void> {
+  await request<void>('/auth/logout', { method: 'POST' }, false);
+}
+
+/**
  * POST /auth/refresh
  * Uses the HttpOnly refresh_token cookie. Rotates the cookie and stores
  * the new access_token in memory.
@@ -324,6 +364,21 @@ export async function getDeveloperRisk(developerId: string): Promise<RiskRespons
   return request<RiskResponse>(`/developers/${developerId}/risk`);
 }
 
+// ─── Weight config (Admin tab — manager only) ─────────────────────────────────
+
+export async function getWeights(): Promise<WeightConfig> {
+  return request<WeightConfig>('/config/weights');
+}
+
+export async function updateWeights(
+  weights: Omit<WeightConfig, 'version'>,
+): Promise<WeightConfig> {
+  return request<WeightConfig>('/config/weights', {
+    method: 'PUT',
+    body: JSON.stringify(weights),
+  });
+}
+
 // ─── Risk — team summary (Manager Dashboard — AC8) ────────────────────────────
 
 /**
@@ -334,4 +389,8 @@ export async function getDeveloperRisk(developerId: string): Promise<RiskRespons
  */
 export async function getTeamRiskSummary(teamId: string): Promise<TeamRiskSummary> {
   return request<TeamRiskSummary>(`/teams/${teamId}/risk-summary`);
+}
+
+export async function getReallocationSuggestion(developerId: string): Promise<ReallocationSuggestion> {
+  return request<ReallocationSuggestion>(`/developers/${developerId}/reallocation-suggestion`);
 }

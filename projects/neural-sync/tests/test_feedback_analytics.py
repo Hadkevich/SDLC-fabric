@@ -378,14 +378,14 @@ async def test_feedback_manager_cannot_submit_for_other_developer():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BLK-002: GET /teams/{team_id}/risk-summary must return 501 (Phase 1)
+# BLK-001 fix: GET /teams/{team_id}/risk-summary now returns 200 + TeamRiskSummary
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def test_team_risk_summary_returns_501_not_implemented():
+async def test_team_risk_summary_returns_200_team_risk_summary():
     """
-    [BLK-002] GET /api/v1/teams/{team_id}/risk-summary must return HTTP 501
-    because Phase 1 has no Team entity and the endpoint previously ignored
-    team_id, silently returning wrong-team data.
+    GET /api/v1/teams/{team_id}/risk-summary must return HTTP 200 with a
+    TeamRiskSummary payload (BLK-001 resolved). Phase 1 fallback: all
+    DeveloperProfile records are returned (no Team entity yet).
     """
     from src.main import app
     from src.db.session import get_db
@@ -411,14 +411,15 @@ async def test_team_risk_summary_returns_501_not_implemented():
                 f"/api/v1/teams/{team_id}/risk-summary",
                 headers=mgr_auth_headers(),
             )
-        assert response.status_code == 501, (
-            f"[BLK-002] GET /teams/{{team_id}}/risk-summary must return 501, "
+        assert response.status_code == 200, (
+            f"GET /teams/{{team_id}}/risk-summary must return 200 (BLK-001 fixed), "
             f"got {response.status_code}: {response.text}"
         )
         body = response.json()
-        assert "not implemented" in body.get("message", "").lower() or \
-               "not implemented" in body.get("detail", "").lower(), (
-            "Response body must indicate Phase 1 not-implemented status"
-        )
+        assert "team_id" in body
+        assert "member_count" in body
+        assert "members" in body
+        assert "risk_distribution" in body
+        assert body["team_id"] == team_id
     finally:
         app.dependency_overrides.clear()
