@@ -892,3 +892,94 @@ def test_feedback_loop_disabled_by_default_is_signal_only(tmp_path):
     assert counts["deploy"] == 1               # no re-deploy attempted
     backlog = json.loads((tmp_path / "artifacts/backlog.json").read_text())
     assert backlog and backlog[0]["status"] == "open"
+
+
+# --------------------------------------------------------------- brownfield extension
+
+# A feature subtree whose new gate tasks depend ONLY on the new developer task — so a
+# rejected feature review can never reset/unlink the existing T-DEV's source (the
+# load-bearing safety rule). T-DEV2 depends on the existing (success) architect node.
+FEATURE_TASKS = [
+    _task("T-DEV2", "developer-agent", ["src/feature.js"], ["T-ARCH"]),
+    _task("T-QA2", "qa-agent", ["artifacts/test_plan.json"], ["T-DEV2"]),
+    _task("T-REV2", "reviewer-agent", ["artifacts/review_report.json"], ["T-QA2"]),
+    _task("T-OPS2", "devops-agent", ["artifacts/release_report.json"], ["T-REV2"]),
+]
+EXTENDED_TASKS = PLANNED_TASKS + FEATURE_TASKS
+
+
+def make_extension_runner(project: Path):
+    """Prelude+DAG runner whose planner emits an ADDITIVE workplan (existing tasks
+    verbatim + a new feature subtree). Tracks developer invocations per task_id so a
+    test can assert the existing developer task is never re-run."""
+    dev_calls: dict = {}
+
+    def fn(task, project_root):
+        if task["owner_agent"] == "developer-agent":
+            dev_calls[task["task_id"]] = dev_calls.get(task["task_id"], 0) + 1
+        for rel in task["outputs"]:
+            p = project / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            name = p.name
+            if name == "requirements.json":
+                p.write_text(json.dumps(_valid_requirements()))
+            elif name == "requirements.md":
+                p.write_text("# requirements (amended)\n")
+            elif name == "workplan.json":
+                p.write_text(json.dumps({"spec_version": "v1", "workflow_id": "wf-test",
+                                         "tasks": EXTENDED_TASKS}))
+            elif name == "architecture.json":
+                p.write_text(json.dumps(_valid_architecture()))
+            elif name == "api-contracts.json":
+                p.write_text(json.dumps({"openapi": "3.1.0",
+                                         "info": {"title": "t", "version": "1"}, "paths": {}}))
+            elif name == "data-model.json":
+                p.write_text(json.dumps({"entities": [
+                    {"name": "E", "fields": [{"name": "id", "type": "UUID"}]}]}))
+            elif name.endswith(".json"):
+                p.write_text(json.dumps(_valid_artifact(name)))
+            else:
+                p.write_text("// code\n")
+    return CallableRunner(fn), dev_calls
+
+
+def test_extend_with_feature_is_additive_and_nondestructive(tmp_path):
+    """Brownfield extension re-runs product+planner additively and builds ONLY the new
+    tasks — the existing developer task is never re-invoked and its source is untouched."""
+    base = _orch(tmp_path, make_prelude_runner(tmp_path)).run_from_prompt("build a thing")
+    assert base["current_stage"] == "complete"
+    app = tmp_path / "src" / "app.js"
+    original_app = app.read_text()
+
+    runner, dev_calls = make_extension_runner(tmp_path)
+    state = _orch(tmp_path, runner).extend_with_feature("add a data export feature")
+
+    assert state["current_stage"] == "complete"
+    # the new feature dev task ran exactly once; the EXISTING dev task was NOT re-run
+    assert dev_calls.get("T-DEV2") == 1
+    assert dev_calls.get("T-DEV", 0) == 0
+    # existing generated source is byte-for-byte untouched; new source exists
+    assert app.read_text() == original_app
+    assert (tmp_path / "src" / "feature.js").exists()
+    # every task (old + new) is success
+    for t in ("T-ARCH", "T-DEV", "T-QA", "T-REV", "T-OPS",
+              "T-DEV2", "T-QA2", "T-REV2", "T-OPS2"):
+        assert state["tasks"][t]["status"] == "success"
+    # the brownfield extension is audited
+    assert any("brownfield feature extension" in e.get("summary", "")
+               for e in _events(tmp_path))
+
+
+def test_extend_with_feature_requires_complete_state(tmp_path):
+    """The guard refuses to extend when there is no completed workflow to build on."""
+    runner, _ = make_extension_runner(tmp_path)
+    # no workflow_state.json at all
+    with pytest.raises(Escalation):
+        _orch(tmp_path, runner).extend_with_feature("x")
+    # an in-flight (non-complete) workflow must not be extended
+    (tmp_path / "artifacts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "artifacts" / "workflow_state.json").write_text(json.dumps({
+        "workflow_id": "wf", "current_stage": "code_generation",
+        "tasks": {}, "stages": {}}))
+    with pytest.raises(Escalation):
+        _orch(tmp_path, runner).extend_with_feature("x")

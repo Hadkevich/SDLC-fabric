@@ -41,6 +41,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--prompt", help="raw request — runs the full prelude (product → "
                                     "planner → architect) before the DAG. Omit to "
                                     "resume from an existing workplan.json.")
+    p.add_argument("--feature", help="add a NEW feature to an already-COMPLETE project "
+                                     "(brownfield). Re-runs product+planner ADDITIVELY "
+                                     "and builds only the new tasks; existing code tasks "
+                                     "stay success and are left untouched. Non-destructive "
+                                     "(unlike --feedback-loop, which reseeds the DAG).")
     p.add_argument("--approve", default="",
                    help="comma-separated checkpoints to approve "
                         "(requirements,architecture,production_deploy)")
@@ -206,7 +211,15 @@ def main(argv=None) -> int:
         print(f"reset {n} task(s) for retry" if n else
               "nothing to reset (no matching blocked tasks)")
 
-    if args.prompt:
+    if args.feature:
+        # brownfield: extend an already-complete project with a new feature
+        # (re-opens only product+planner additively; existing code tasks untouched)
+        try:
+            state = orch.extend_with_feature(args.feature)
+        except Exception as exc:  # surface the guard message cleanly, no traceback
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    elif args.prompt:
         # start (or restart) a prompt-driven workflow: full prelude → DAG
         state = orch.run_from_prompt(args.prompt)
     elif state_file.exists():

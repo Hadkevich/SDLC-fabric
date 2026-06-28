@@ -44,6 +44,18 @@ Only once the design is coherent in this analysis, write the artifacts below.
 6. Validate `artifacts/architecture.json` against `schemas/architecture.schema.json`.
 7. Report your `output_refs` and status to the orchestrator. Do **not** write to `events.log.jsonl` — the orchestrator stamps `event_id`/`timestamp` and logs your completion (SPEC §8.4).
 
+## Incremental / brownfield mode (extending an existing project)
+If `artifacts/architecture.json`, `artifacts/api-contracts.json`, or `artifacts/data-model.json`
+already exist, you are extending a project the factory already built. **Read them first and EXTEND
+them — never regenerate wholesale.**
+- Preserve every existing component, endpoint, and entity. ADD the new feature's components,
+  endpoints, and entities to the existing structures; do not drop or rename existing ones.
+- Keep all existing ADRs; add new ADRs only for the new feature's decisions.
+- If a change to an existing contract is genuinely unavoidable, record it as a new ADR with a
+  backward-compatibility/migration note rather than silently breaking the existing shape.
+- The downstream developer only implements the NEW workplan tasks, so the contracts you emit must
+  remain valid for the existing (untouched) code as well as the new code.
+
 ## Decision boundaries
 **Can decide:** system decomposition (components, interfaces, boundaries); technology choices
 (language, framework, persistence, API style, auth) with ADR justification; the single-origin
