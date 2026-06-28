@@ -122,7 +122,7 @@ class ClaudeAgentRunner(Runner):
 
     def __init__(self, *, cli: str = "claude", permission_mode: str = "acceptEdits",
                  add_dirs=None, model: str | None = None, timeout: int = 1800,
-                 extra_args=None):
+                 extra_args=None, mcp_config: str | None = None):
         if permission_mode not in self._PERMISSION_MODES:
             raise ValueError(
                 f"permission_mode {permission_mode!r} not in {sorted(self._PERMISSION_MODES)}")
@@ -132,6 +132,11 @@ class ClaudeAgentRunner(Runner):
         self.model = model
         self.timeout = timeout
         self.extra_args = list(extra_args or ())
+        # MCP server config (e.g. the repo .mcp.json with the Playwright server the
+        # e2e-agent needs). The CLI is spawned with cwd=<project>, which has no
+        # .mcp.json, so without this an agent that declares mcp__* tools (e2e) finds
+        # no server and can't drive the browser. Passed via --mcp-config when set.
+        self.mcp_config = str(mcp_config) if mcp_config else None
 
     def _prompt(self, task, project_root):
         """Task-specific user message. The *role* comes from the agent definition
@@ -164,10 +169,19 @@ class ClaudeAgentRunner(Runner):
         # Agent files follow the convention <short-name>.agent.md
         # (e.g. "e2e-agent" → "e2e.agent.md", "developer-agent" → "developer.agent.md").
         # Fall back to <owner_agent>.md for any non-standard names.
+        # Search the project root AND the configured add_dirs (which include the repo
+        # root) — for a sub-project under projects/, the agent definitions live at the
+        # repo root, not in the project. Without this the e2e-agent's mcp__playwright
+        # tools were never granted via --allowedTools, so it couldn't drive the browser.
         short = owner_agent.removesuffix("-agent")
-        agent_file = Path(project_root) / ".claude" / "agents" / f"{short}.agent.md"
-        if not agent_file.exists():
-            agent_file = Path(project_root) / ".claude" / "agents" / f"{owner_agent}.md"
+        roots = [Path(project_root), *(Path(d) for d in self.add_dirs)]
+        names = [f"{short}.agent.md", f"{owner_agent}.md"]
+        agent_file = next(
+            (root / ".claude" / "agents" / name
+             for root in roots for name in names
+             if (root / ".claude" / "agents" / name).exists()),
+            Path(project_root) / ".claude" / "agents" / f"{short}.agent.md",
+        )
         for stripped in read_frontmatter_lines(agent_file):
             if stripped.startswith("tools:"):
                 bracket_start = stripped.find("[")
@@ -189,7 +203,12 @@ class ClaudeAgentRunner(Runner):
             cmd += ["--model", self.model]
         for d in self.add_dirs:
             cmd += ["--add-dir", d]
-        for tool in self._mcp_tools_from_frontmatter(task["owner_agent"], project_root):
+        mcp_tools = self._mcp_tools_from_frontmatter(task["owner_agent"], project_root)
+        # Load the MCP servers (e.g. Playwright) only when this agent actually
+        # declares mcp__* tools — the CLI's cwd=<project> has no .mcp.json of its own.
+        if mcp_tools and self.mcp_config:
+            cmd += ["--mcp-config", self.mcp_config]
+        for tool in mcp_tools:
             cmd += ["--allowedTools", tool]
         cmd += self.extra_args
         return cmd

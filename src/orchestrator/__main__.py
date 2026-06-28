@@ -215,10 +215,14 @@ def main(argv=None) -> int:
     if args.replay:
         runner = ReplayRunner()
     else:
+        _mcp_cfg = REPO_ROOT / ".mcp.json"
         runner = ClaudeAgentRunner(
             permission_mode=args.permission_mode,
             add_dirs=[str(REPO_ROOT)],  # so agents can read schemas/ + SPEC.md
             model=args.model,
+            # repo .mcp.json carries the Playwright server the e2e-agent drives;
+            # the CLI runs with cwd=<project> (no .mcp.json there) so pass it through.
+            mcp_config=str(_mcp_cfg) if _mcp_cfg.exists() else None,
         )
 
     orch = Orchestrator(
