@@ -193,6 +193,7 @@ async def health(verbose: bool = False) -> dict:
 
 from src.api import auth, matches, developers, projects, config, feedback, analytics  # noqa: E402
 from src.api import ingestion  # noqa: E402
+from src.api import admin  # noqa: E402
 
 PREFIX = "/api/v1"
 
@@ -204,3 +205,4 @@ app.include_router(config.router, prefix=PREFIX)
 app.include_router(feedback.router, prefix=PREFIX)
 app.include_router(analytics.router, prefix=PREFIX)
 app.include_router(ingestion.router, prefix=PREFIX)  # data ingestion (T-11)
+app.include_router(admin.router, prefix=PREFIX)      # admin allocation overrides (WS-E2)
