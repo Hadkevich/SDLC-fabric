@@ -29,9 +29,13 @@ pydantic==2.7.1
 pydantic-settings==2.3.0
 
 # ── Embeddings (optional backends) ───────────────────────────────────────────
-# sentence-transformers is large (~900 MB) — comment out for CI if unneeded
-sentence-transformers==2.7.0
-openai==1.30.1                   # OpenAI embedding fallback
+# Default embedding dim is 1536 (pgvector columns + HNSW indexes + seed). The
+# random + OpenAI backends emit 1536; sentence-transformers emits 384 and is only
+# selected when EMBEDDING_DIM=384 is set explicitly (see src/engine/embeddings.py).
+# It is large (~900 MB) and OFF by default to keep the 1536 path canonical and CI lean.
+# Uncomment ONLY together with EMBEDDING_DIM=384 + a column re-migration.
+# sentence-transformers==2.7.0
+openai==1.30.1                   # OpenAI embedding fallback (1536-dim)
 
 # ── Utilities ────────────────────────────────────────────────────────────────
 python-dotenv==1.0.1             # .env file loading for local dev

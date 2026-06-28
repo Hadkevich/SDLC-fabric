@@ -32,13 +32,14 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 # pgvector support — import at module level so Alembic can introspect
 try:
     from pgvector.sqlalchemy import Vector  # type: ignore
-    _VECTOR_DIM = 1536
 except ImportError:  # pragma: no cover
     # Fallback for environments without pgvector installed (type checking only)
     from sqlalchemy import Text as Vector  # type: ignore  # noqa: F811
-    _VECTOR_DIM = 1536
 
-EMBEDDING_DIM: int = _VECTOR_DIM
+from src.core.settings import settings
+
+# Single source of truth for the vector column dimension (see settings.embedding_dim).
+EMBEDDING_DIM: int = settings.embedding_dim
 
 
 def _now() -> datetime:

@@ -60,6 +60,14 @@ class Settings:
     # ── Matching engine ──────────────────────────────────────────────────
     vector_search_timeout_ms: float = float(os.getenv("VECTOR_SEARCH_TIMEOUT_MS", "150"))
 
+    # ── Embeddings ───────────────────────────────────────────────────────
+    # Single source of truth for the pgvector column dimension. The DB column,
+    # the embedding backend, and the HNSW indexes must all agree on this value.
+    # Default 1536 matches the OpenAI/random backends, the seeded vectors, and the
+    # VECTOR(1536) columns created by migration 001. Only set EMBEDDING_DIM=384 if
+    # you intend to run the sentence-transformers backend AND migrate the columns.
+    embedding_dim: int = int(os.getenv("EMBEDDING_DIM", "1536"))
+
     # ── CORS ─────────────────────────────────────────────────────────────
     allowed_origins: list[str] = [
         o.strip()

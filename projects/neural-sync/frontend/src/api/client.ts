@@ -124,6 +124,10 @@ export interface TeamRiskMember {
   bench_risk_score: number;
   burnout_risk_badge: RiskBadgeLevel;
   bench_risk_badge: RiskBadgeLevel;
+  // Task04 §1 third prediction — null when the developer has no match against an
+  // assigned project yet (behavioral fit unknown). Never exposes raw vectors (AC8).
+  team_mismatch_probability?: number | null;
+  team_mismatch_badge?: RiskBadgeLevel | null;
 }
 
 export interface TeamRiskDistribution {

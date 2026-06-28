@@ -653,3 +653,50 @@ def test_prompt_artifact_is_versioned_file_not_inline_code():
     assert service.prompt.version == int(data["version"]), (
         "[AC12] ClaudeService.prompt.version must match the artifact version"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Availability factor inside the w4 dimension (Task04 §1 "Availability & time zone")
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_availability_is_neutral_by_default():
+    """Omitting availability args must leave the timezone score unchanged (back-compat)."""
+    base = compute_timezone_score("Europe/Warsaw", "UTC+1 to UTC+3")
+    same = compute_timezone_score("Europe/Warsaw", "UTC+1 to UTC+3", None, None)
+    assert base == same == 1.0
+
+
+def test_full_availability_does_not_penalize():
+    """A developer who meets the expected weekly load keeps the full base score."""
+    score = compute_timezone_score(
+        "Europe/Warsaw", "UTC+1 to UTC+3",
+        availability_hours=40, workload_intensity=0.9,
+    )
+    assert score == 1.0
+
+
+def test_low_availability_reduces_high_workload_score():
+    """Insufficient availability for a high-workload project softly reduces w4."""
+    full = compute_timezone_score(
+        "Europe/Warsaw", "UTC+1 to UTC+3",
+        availability_hours=40, workload_intensity=0.9,
+    )
+    low = compute_timezone_score(
+        "Europe/Warsaw", "UTC+1 to UTC+3",
+        availability_hours=10, workload_intensity=0.9,
+    )
+    assert low < full
+    assert 0.0 <= low <= 1.0
+    # Soft signal: never collapses the dimension below the 0.7 floor of the multiplier.
+    assert low >= 0.7
+
+
+def test_availability_factor_bounded():
+    """The availability-adjusted score stays within [0, 1] across extremes."""
+    for hours in (1, 20, 40, 168):
+        for intensity in (0.0, 0.5, 1.0):
+            s = compute_timezone_score(
+                "US/Pacific", "UTC+5 to UTC+8",
+                availability_hours=hours, workload_intensity=intensity,
+            )
+            assert 0.0 <= s <= 1.0

@@ -728,6 +728,8 @@ async def get_reallocation_suggestion(
         timezone_score = compute_timezone_score(
             dev_timezone=dev.timezone or "UTC+0",
             project_timezone_overlap=proj.timezone_overlap_required or "UTC+0..UTC+3",
+            availability_hours=dev.availability_hours,
+            workload_intensity=proj.workload_intensity,
         )
         growth_score = compute_growth_score(
             career_goals=dev.career_goals or [],

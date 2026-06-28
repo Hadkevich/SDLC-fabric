@@ -365,7 +365,10 @@ async def create_match(
         proj_in.workload_intensity,
     )
     timezone_score = compute_timezone_score(
-        dev_in.timezone, proj_in.timezone_overlap_required
+        dev_in.timezone,
+        proj_in.timezone_overlap_required,
+        availability_hours=dev_in.availability_hours,
+        workload_intensity=proj_in.workload_intensity,
     )
     growth_score = compute_growth_score(
         dev_in.career_goals, proj_in.growth_opportunities

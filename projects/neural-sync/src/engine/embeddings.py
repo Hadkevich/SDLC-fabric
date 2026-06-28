@@ -21,6 +21,8 @@ import random
 from enum import Enum
 from typing import Optional
 
+from src.core.settings import settings
+
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -33,15 +35,35 @@ class EmbeddingBackend(str, Enum):
     RANDOM = "random"  # dev/CI fallback
 
 
-def _detect_backend() -> EmbeddingBackend:
-    # Prefer the local, key-free backend; fall back to OpenAI only if its key is set.
-    try:
-        import sentence_transformers  # noqa: F401
-        return EmbeddingBackend.SENTENCE_TRANSFORMERS
-    except ImportError:
-        pass
+# Native output dimension of each real model backend. The RANDOM fallback is
+# dimension-flexible and always emits settings.embedding_dim.
+_NATIVE_DIM: dict[EmbeddingBackend, int] = {
+    EmbeddingBackend.SENTENCE_TRANSFORMERS: 384,
+    EmbeddingBackend.OPENAI: 1536,
+}
 
-    if os.getenv("OPENAI_API_KEY"):
+
+def _detect_backend() -> EmbeddingBackend:
+    """Select an embedding backend whose output dimension matches the configured
+    ``settings.embedding_dim``.
+
+    This is the guardrail for the latent dimension bug: the pgvector columns are
+    ``VECTOR(settings.embedding_dim)`` (default 1536), so a backend that emits a
+    different width (sentence-transformers → 384) would fail every INSERT. We only
+    pick such a backend when the configured dim actually equals its native width.
+    """
+    target = settings.embedding_dim
+
+    # Local, key-free — but only when the target dim matches (i.e. EMBEDDING_DIM=384).
+    if _NATIVE_DIM[EmbeddingBackend.SENTENCE_TRANSFORMERS] == target:
+        try:
+            import sentence_transformers  # noqa: F401
+            return EmbeddingBackend.SENTENCE_TRANSFORMERS
+        except ImportError:
+            pass
+
+    # OpenAI — only when the target dim matches (1536) and a key is configured.
+    if _NATIVE_DIM[EmbeddingBackend.OPENAI] == target and os.getenv("OPENAI_API_KEY"):
         try:
             import openai  # noqa: F401
             return EmbeddingBackend.OPENAI
@@ -49,8 +71,10 @@ def _detect_backend() -> EmbeddingBackend:
             pass
 
     logger.warning(
-        "No embedding backend available (sentence-transformers or openai not installed). "
-        "Using deterministic random embeddings — suitable for dev/CI only."
+        "No dimension-compatible embedding backend for dim=%d "
+        "(sentence-transformers=384, openai=1536). "
+        "Using deterministic random embeddings — suitable for dev/CI only.",
+        target,
     )
     return EmbeddingBackend.RANDOM
 
@@ -66,7 +90,8 @@ _ST_MODEL = None  # lazy-loaded sentence-transformers model
 EMBEDDING_DIM_MAP: dict[EmbeddingBackend, int] = {
     EmbeddingBackend.SENTENCE_TRANSFORMERS: 384,
     EmbeddingBackend.OPENAI: 1536,
-    EmbeddingBackend.RANDOM: 1536,
+    # RANDOM is dimension-flexible — it mirrors the configured column dimension.
+    EmbeddingBackend.RANDOM: settings.embedding_dim,
 }
 
 MODEL_NAME_MAP: dict[EmbeddingBackend, str] = {
@@ -83,6 +108,8 @@ MODEL_VERSION_MAP: dict[EmbeddingBackend, str] = {
 
 
 def get_embedding_dim() -> int:
+    if _BACKEND == EmbeddingBackend.RANDOM:
+        return settings.embedding_dim
     return EMBEDDING_DIM_MAP[_BACKEND]
 
 
@@ -175,30 +202,40 @@ def _random_unit_vector(text: str, dim: int) -> list[float]:
 def embed_text(text: str) -> list[float]:
     """
     Embed a text string using the active backend.
-    Returns a normalized float vector.
+    Returns a normalized float vector of length ``get_embedding_dim()``.
     """
     global _ST_MODEL
 
     if _BACKEND == EmbeddingBackend.RANDOM:
-        return _random_unit_vector(text, EMBEDDING_DIM_MAP[_BACKEND])
-
-    if _BACKEND == EmbeddingBackend.SENTENCE_TRANSFORMERS:
+        vector = _random_unit_vector(text, get_embedding_dim())
+    elif _BACKEND == EmbeddingBackend.SENTENCE_TRANSFORMERS:
         if _ST_MODEL is None:
             from sentence_transformers import SentenceTransformer
             _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
         embedding = _ST_MODEL.encode(text, normalize_embeddings=True)
-        return [float(x) for x in embedding]
-
-    if _BACKEND == EmbeddingBackend.OPENAI:
+        vector = [float(x) for x in embedding]
+    elif _BACKEND == EmbeddingBackend.OPENAI:
         import openai
         client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         response = client.embeddings.create(
             input=text,
             model="text-embedding-3-small",
         )
-        return response.data[0].embedding
+        vector = list(response.data[0].embedding)
+    else:
+        raise RuntimeError(f"Unknown embedding backend: {_BACKEND}")
 
-    raise RuntimeError(f"Unknown embedding backend: {_BACKEND}")
+    # Fail loud at generation time if a backend's width drifts from the configured
+    # column dimension — otherwise the mismatch surfaces as an opaque pgvector
+    # INSERT error inside a background task and silently flips embedding_status='failed'.
+    expected = get_embedding_dim()
+    if len(vector) != expected:
+        raise RuntimeError(
+            f"Embedding backend {_BACKEND.value} produced dim {len(vector)} "
+            f"but column/config expects {expected}. Set EMBEDDING_DIM to match the "
+            f"backend, or use a dimension-compatible backend."
+        )
+    return vector
 
 
 # ─────────────────────────────────────────────────────────────────────────────
