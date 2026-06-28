@@ -35,6 +35,98 @@
     { "name": "ingestion",  "description": "Manager-only data ingestion from source connectors (file + network) in preview/commit modes (AC29/AC30)" }
   ],
   "paths": {
+    "/developers/{developer_id}/recommendations": {
+      "post": {
+        "tags": ["developers", "matches"],
+        "summary": "On-demand ANN recommendations",
+        "description": "pgvector ANN pre-selects candidate projects; the deterministic engine scores them; MatchRecords are upserted (never deleted); returns ranked top-K. Falls back to a relational scan with vector_search_degraded=true.",
+        "operationId": "recommend_projects",
+        "parameters": [
+          { "name": "developer_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "DeveloperMatchesResponse (ranked top-K)" },
+          "403": { "description": "Forbidden" },
+          "404": { "description": "Developer not found" }
+        }
+      }
+    },
+    "/developers/{developer_id}/similar": {
+      "get": {
+        "tags": ["developers"],
+        "summary": "ANN nearest peers (internal mobility)",
+        "description": "Nearest developers by behavioral embedding (ANN over developer_embeddings). AC8-safe — no raw vectors returned.",
+        "operationId": "get_similar_developers",
+        "parameters": [
+          { "name": "developer_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "top_k", "in": "query", "required": false, "schema": { "type": "integer", "default": 10 } }
+        ],
+        "responses": {
+          "200": { "description": "SimilarDevelopersResponse" },
+          "403": { "description": "Forbidden" },
+          "404": { "description": "Developer not found" }
+        }
+      }
+    },
+    "/admin/allocations": {
+      "post": {
+        "tags": ["admin"],
+        "summary": "Create allocation (system override, Admin View §6)",
+        "description": "Admin role only. Assign or move a developer onto a project (project_id null = bench). Allocations drive the risk engine.",
+        "operationId": "create_allocation",
+        "responses": {
+          "201": { "description": "AllocationResponse" },
+          "403": { "description": "Admin role required" },
+          "404": { "description": "Developer or project not found" },
+          "422": { "description": "end_date < start_date" }
+        }
+      }
+    },
+    "/admin/allocations/{allocation_id}": {
+      "put": {
+        "tags": ["admin"],
+        "summary": "Update allocation (system override)",
+        "description": "Admin role only. Edit project, dates, intensity, or active flag.",
+        "operationId": "update_allocation",
+        "parameters": [
+          { "name": "allocation_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "AllocationResponse" },
+          "403": { "description": "Admin role required" },
+          "404": { "description": "Allocation not found" }
+        }
+      },
+      "delete": {
+        "tags": ["admin"],
+        "summary": "Delete allocation (system override)",
+        "description": "Admin role only.",
+        "operationId": "delete_allocation",
+        "parameters": [
+          { "name": "allocation_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "204": { "description": "Deleted" },
+          "403": { "description": "Admin role required" },
+          "404": { "description": "Allocation not found" }
+        }
+      }
+    },
+    "/admin/developers/{developer_id}/allocations": {
+      "get": {
+        "tags": ["admin"],
+        "summary": "List a developer's allocations",
+        "description": "Admin role only.",
+        "operationId": "list_developer_allocations",
+        "parameters": [
+          { "name": "developer_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Array of AllocationResponse" },
+          "403": { "description": "Admin role required" }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": ["health"],
@@ -153,6 +245,26 @@
       }
     },
     "/developers": {
+      "get": {
+        "tags": ["developers"],
+        "summary": "List developers (paginated roster)",
+        "description": "Manager/admin paginated, filterable roster for 10k+ scale. Server-side limit/offset, indexed filters (skill via JSONB GIN, timezone, embedding_status, cached risk_badge), display_name search, sort. AC8-safe (no raw vectors). 403 for developer role.",
+        "operationId": "list_developers",
+        "parameters": [
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 50 } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "default": 0 } },
+          { "name": "skill", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "timezone", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "embedding_status", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "risk_badge", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "search", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "sort", "in": "query", "required": false, "schema": { "type": "string", "default": "display_name" } }
+        ],
+        "responses": {
+          "200": { "description": "DeveloperListResponse { items, total, limit, offset, next_offset }" },
+          "403": { "description": "Manager or admin role required" }
+        }
+      },
       "post": {
         "tags": ["developers"],
         "summary": "Ingest a new developer profile",
