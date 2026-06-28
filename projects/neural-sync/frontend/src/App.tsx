@@ -19,11 +19,12 @@ import type { CSSProperties, FormEvent } from 'react';
 import type { LoginResponse } from './api/client';
 import { login, logout, setAccessToken } from './api/client';
 import { DeveloperDashboard } from './pages/DeveloperDashboard';
+import { IngestionPage } from './pages/IngestionPage';
 import { ManagerDashboard } from './pages/ManagerDashboard';
 import { WeightConfigPage } from './pages/WeightConfigPage';
 import { ProfilePage } from './pages/ProfilePage';
 
-type ManagerTab = 'risk' | 'weights' | 'profile';
+type ManagerTab = 'risk' | 'weights' | 'profile' | 'ingestion';
 type DeveloperTab = 'recommendations' | 'profile';
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
@@ -274,6 +275,13 @@ export default function App() {
           <button onClick={() => setManagerTab('weights')} style={tabBtnStyle(managerTab === 'weights')}>
             Weight Config
           </button>
+          <button
+            data-testid="ingestion-tab-button"
+            onClick={() => setManagerTab('ingestion')}
+            style={tabBtnStyle(managerTab === 'ingestion')}
+          >
+            Ingestion
+          </button>
           <button onClick={() => setManagerTab('profile')} style={tabBtnStyle(managerTab === 'profile')}>
             My Profile
           </button>
@@ -300,6 +308,7 @@ export default function App() {
 
       {managerTab === 'risk' && <ManagerDashboard teamId={teamId} />}
       {managerTab === 'weights' && <WeightConfigPage />}
+      {managerTab === 'ingestion' && <IngestionPage />}
       {managerTab === 'profile' && <ProfilePage role="manager" userId={session.user_id} />}
     </div>
   );

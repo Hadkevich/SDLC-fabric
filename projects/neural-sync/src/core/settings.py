@@ -81,6 +81,25 @@ class Settings:
     cookie_secure: bool = os.getenv("COOKIE_SECURE", "false").lower() == "true"
     cookie_samesite: str = os.getenv("COOKIE_SAMESITE", "strict")
 
+    # ── Data Ingestion Connectors ─────────────────────────────────────────
+    # GitLab connector settings [AC28]
+    gitlab_base_url: str = os.getenv("GITLAB_BASE_URL", "https://gitlab.com")
+    gitlab_token: str = os.getenv("GITLAB_TOKEN", "")
+    gitlab_max_pages: int = int(os.getenv("GITLAB_MAX_PAGES", "10"))
+
+    # Jira connector settings [AC28]
+    jira_base_url: str = os.getenv("JIRA_BASE_URL", "")
+    jira_email: str = os.getenv("JIRA_EMAIL", "")
+    jira_token: str = os.getenv("JIRA_TOKEN", "")
+
+    # File upload and batch limits [AC28]
+    # MAX_UPLOAD_BYTES: maximum allowed request body size for file ingestion
+    # (default 10 MiB); payloads exceeding this limit receive HTTP 413.
+    max_upload_bytes: int = int(os.getenv("MAX_UPLOAD_BYTES", "10485760"))
+    # INGESTION_MAX_RECORDS: maximum number of SourceDocument records processed
+    # per ingestion batch; surplus records are truncated with a notice in errors.
+    ingestion_max_records: int = int(os.getenv("INGESTION_MAX_RECORDS", "500"))
+
     # ── App metadata ─────────────────────────────────────────────────────
     app_version: str = "1.0.0"
     debug: bool = os.getenv("DEBUG", "false").lower() == "true"

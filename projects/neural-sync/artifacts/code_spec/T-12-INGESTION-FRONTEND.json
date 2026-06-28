@@ -1,0 +1,54 @@
+{
+  "spec_version": "v1",
+  "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
+  "task_id": "T-12-INGESTION-FRONTEND",
+  "title": "Frontend: Ingestion Page and Multipart Client Helper (in-place merge of frontend/src/api/client.ts)",
+  "files_affected": [
+    {
+      "path": "frontend/src/api/client.ts",
+      "change_type": "modified",
+      "description": "In-place merge: added ConnectorInfo, IngestionProvenance, IngestionDraft, IngestionSummary, GitlabIngestionRequest, JiraIngestionRequest types; added listIngestionConnectors(), uploadFile() multipart helper, ingestGitlab(), ingestJira() API functions. All existing functions and types are preserved unchanged."
+    },
+    {
+      "path": "frontend/src/components/ConnectorPicker.tsx",
+      "change_type": "created",
+      "description": "ConnectorPicker component populated from GET /api/v1/ingestion/connectors. Credential-gated connectors rendered as disabled with a title/tooltip attribute stating required credentials. Each connector button carries data-testid='connector-option-{source}'. Component wrapper has data-testid='connector-picker'."
+    },
+    {
+      "path": "frontend/src/components/DraftReviewTable.tsx",
+      "change_type": "created",
+      "description": "DraftReviewTable scrollable table rendering IngestionSummary.drafts. Columns: display_name, email, source, skills (badge list), timezone, experience_years, availability_hours, provenance. Carries data-testid='draft-review-table' and data-testid='draft-review-table-wrapper'. Empty state uses data-testid='draft-review-empty'."
+    },
+    {
+      "path": "frontend/src/pages/IngestionPage.tsx",
+      "change_type": "created",
+      "description": "Manager-only ingestion page with: (1) ConnectorPicker wired to listIngestionConnectors; (2) file dropzone (data-testid='file-dropzone', 'file-input') for file-kind connectors accepting CSV/JSON/TXT/MD; (3) GitLab form with data-testid='gitlab-username', 'gitlab-project', 'gitlab-token' for gitlab connector; (4) Jira form with data-testid='jira-base-url', 'jira-email', 'jira-token', 'jira-project-key', 'jira-usernames' for jira connector; (5) Preview button (data-testid='preview-button') posting mode=preview and rendering DraftReviewTable; (6) Approve and Create button (data-testid='approve-create-button') re-posting mode=commit and showing created count via data-testid='ingestion-created-count'. Page container has data-testid='ingestion-page'."
+    },
+    {
+      "path": "frontend/src/App.tsx",
+      "change_type": "modified",
+      "description": "Wired IngestionPage into the existing manager tab pattern: added 'ingestion' to ManagerTab union type, imported IngestionPage, added Ingestion tab button (data-testid='ingestion-tab-button') to manager nav bar, added conditional render '{managerTab === ingestion && <IngestionPage />}'. Developer tabs and all other manager tabs unchanged."
+    }
+  ],
+  "implementation_notes": "All five done criteria groups satisfied: (1) IngestionPage is rendered only for manager-role sessions via the existing App.tsx tab mechanism — no react-router used, matching ManagerDashboard/WeightConfigPage conventions. (2) ConnectorPicker calls GET /api/v1/ingestion/connectors and disables credential-gated entries (availability==='credential-gated') with a title tooltip listing required_credentials. (3) FileDropzone component inside IngestionPage uses native HTML5 drag-and-drop events and a hidden <input type='file'> accepting .csv,.json,.txt,.md; file selection calls uploadFile() from the updated client.ts. (4) GitLab form (username required, project optional, token optional) and Jira form (base_url, email, token, project_key, usernames all required) are rendered based on selected connector source. (5) Preview button calls executeRequest('preview') and renders DraftReviewTable with returned drafts; Approve and Create button calls executeRequest('commit') and shows IngestionSummary.created count. uploadFile() uses a raw fetch() (not the request() helper) so the browser sets the multipart/form-data Content-Type with the correct boundary — all other client.ts functions untouched. TypeScript type check (tsc --noEmit) passes with zero errors. The Vite production build fails in this environment due to a pre-existing missing @rollup/rollup-darwin-arm64 native binary (an npm optional-dependency installation bug present before this task); the build would succeed on any properly configured CI system.",
+  "contracts_satisfied": [
+    "GET /api/v1/ingestion/connectors — ConnectorPicker fetches and renders all returned connectors; credential-gated ones disabled with tooltip [AC26, AC29]",
+    "POST /api/v1/ingestion/file — uploadFile() multipart helper sends file + source + mode fields [AC26]",
+    "POST /api/v1/ingestion/gitlab — ingestGitlab() sends JSON body with username, project, token, mode [AC26]",
+    "POST /api/v1/ingestion/jira — ingestJira() sends JSON body with base_url, email, token, project_key, usernames, mode [AC26]",
+    "IngestionSummary schema — IngestionPage renders extracted/enriched/skipped/created/provenance/errors/drafts [AC26, AC29]",
+    "ConnectorInfo schema — ConnectorPicker uses source, display_name, kind, availability, required_credentials, accepted_file_types [AC29]",
+    "Manager-only access — IngestionPage rendered only inside manager role branch of App.tsx; relies on backend require_manager enforcement for 401/403 [AC21, AC26]"
+  ],
+  "test_refs": [
+    "tests/test_ingestion_api.py — integration tests for all /ingestion/* endpoints exercised by these client functions",
+    "tests/test_ingestion_auth.py — auth boundary tests (403 for developer role, 401 unauthenticated) covered by backend; frontend relies on backend enforcement",
+    "tests/integration/test_ingestion_pipeline.py — end-to-end pipeline test covering preview and commit modes",
+    "e2e validation via T-16-E2E: all data-testid attributes declared in this spec (connector-picker, connector-option-{source}, file-dropzone, file-input, gitlab-username, gitlab-project, gitlab-token, jira-base-url, jira-email, jira-token, jira-project-key, jira-usernames, preview-button, approve-create-button, ingestion-created-count, draft-review-table) are targets for the e2e-agent browser validation"
+  ],
+  "known_limitations": [
+    "Vite production build fails in the current dev environment due to a pre-existing missing @rollup/rollup-darwin-arm64 native binary (npm optional dependency installation bug). This is unrelated to the TypeScript code changes; `tsc --noEmit` passes with zero errors. Rebuild after `npm ci` or `npm install` on a CI runner resolves this.",
+    "Jira connector is credential-gated and will always be disabled in ConnectorPicker — the Jira form code path in IngestionPage is reachable only if the backend returns availability='live' for jira, which the current connectors implementation does not do.",
+    "File dropzone does not enforce MAX_UPLOAD_BYTES client-side; over-limit uploads are rejected by the backend with HTTP 413 which the uploadFile() helper surfaces as an ApiClientError."
+  ]
+}

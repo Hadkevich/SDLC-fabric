@@ -116,9 +116,9 @@
         "No LLM prompt strings are inline in application source files; code_spec.json references the prompt artifact file path [AC12]",
         "Changing artifacts/prompts/match_explanation_v1.json does not require modifying any .py source file [AC12]",
         "PUT /api/v1/config/weights persists the new w1–w5 weight map; all subsequent POST /api/v1/matches calls on identical profile inputs return scores reflecting the updated weights [AC6]",
-        "GET /api/v1/developers/{id}/risk returns burnout_risk_score > 0.6 when developer's allocation record shows ≥48 consecutive weeks at workload_intensity ≥ 0.8 [AC4]",
-        "GET /api/v1/developers/{id}/risk returns bench_risk_score > 0.7 when developer's current project end_date is within 28 days and no follow-on allocation exists [AC5]",
-        "DELETE /api/v1/developers/{id} purges: the developer's structured profile row, all associated vector embeddings, all MatchRecord rows, and all FeedbackRecord rows; returns HTTP 204; a subsequent GET /api/v1/developers/{id} returns HTTP 404 [AC9]",
+        "GET /api/v1/developers/{id}/risk returns burnout_risk_score > 0.6 when developer’s allocation record shows ≥48 consecutive weeks at workload_intensity ≥ 0.8 [AC4]",
+        "GET /api/v1/developers/{id}/risk returns bench_risk_score > 0.7 when developer’s current project end_date is within 28 days and no follow-on allocation exists [AC5]",
+        "DELETE /api/v1/developers/{id} purges: the developer’s structured profile row, all associated vector embeddings, all MatchRecord rows, and all FeedbackRecord rows; returns HTTP 204; a subsequent GET /api/v1/developers/{id} returns HTTP 404 [AC9]",
         "POST /api/v1/matches/feedback stores FeedbackRecord; GET /api/v1/analytics/rejection-rate?developer_id={id} returns the rejection ratio computed from stored feedback with ≥1 sample [AC10]",
         "Manager-facing API endpoints do not return raw work_style vectors or motivation scalar arrays in any response body; only aggregated risk scores and badges are exposed [AC8]",
         "Database migrations and seed data fixture (≥50 developer profiles, ≥20 project profiles) included to support local development and CI testing"
@@ -180,7 +180,7 @@
         "Manager dashboard API responses verified to exclude raw behavioral vectors and motivation scalars [AC8]",
         "Matching engine weight-configurability verified: weights are read at runtime from config/DB, not hardcoded [AC6]",
         "Risk scoring logic reviewed for correctness against AC4 (burnout) and AC5 (bench) threshold criteria",
-        "No critical security vulnerabilities (e.g., SQL injection, unauthenticated deletion of other users' data) identified without a documented mitigation",
+        "No critical security vulnerabilities (e.g., SQL injection, unauthenticated deletion of other users’ data) identified without a documented mitigation",
         "verdict field is one of: approved, approved_with_comments, rejected"
       ]
     },
@@ -257,6 +257,298 @@
         "CI pipeline executes and passes: unit tests, integration test (full match pipeline end-to-end), and latency check [AC13]",
         "Database migrations run successfully against the target environment",
         "Deployment is reproducible via documented runbook or Dockerfile/compose file in release_report.json"
+      ]
+    },
+    {
+      "task_id": "T-09-ARCH-INGESTION",
+      "title": "Architecture & API Contract Update: Add Data Ingestion Service (in-place merge of architecture.json and api-contracts.json)",
+      "owner_agent": "architect-agent",
+      "inputs": [
+        "artifacts/requirements.json",
+        "artifacts/architecture.json",
+        "artifacts/api-contracts.json"
+      ],
+      "outputs": [
+        "artifacts/architecture.json",
+        "artifacts/api-contracts.json"
+      ],
+      "depends_on": [],
+      "done_criteria": [
+        "artifacts/architecture.json updated in-place to add a data-ingestion-service component listing five connector subcomponents: gitlab-connector, hr-connector, slack-connector, cv-connector, jira-connector [AC30]",
+        "Each connector subcomponent in architecture.json documents failure modes (rate-limit, missing-credentials, oversized-upload) with a degradation field describing the graceful fallback behavior for every failure mode [AC30]",
+        "artifacts/api-contracts.json updated in-place with OpenAPI 3.x path item definitions for: GET /api/v1/ingestion/connectors, POST /api/v1/ingestion/file, POST /api/v1/ingestion/gitlab, POST /api/v1/ingestion/jira [AC29]",
+        "ConnectorInfo schema component added to api-contracts.json components/schemas with at minimum kind ('file' or 'network') and availability ('live' or 'credential-gated') fields [AC29]",
+        "IngestionSummary schema component added to api-contracts.json components/schemas with fields: extracted (integer), enriched (integer), skipped (integer), created (integer), provenance ({llm: integer, heuristic: integer}), errors (array of strings), drafts (array) [AC29]",
+        "All /api/v1/ingestion/* path definitions in api-contracts.json specify HTTP 401 for unauthenticated and HTTP 403 for non-manager-role callers [AC29]",
+        "Updated artifacts/architecture.json and artifacts/api-contracts.json remain valid against their respective schemas after the merge"
+      ]
+    },
+    {
+      "task_id": "T-10-CONNECTORS",
+      "title": "Backend: Connector Abstraction and Five Source Connectors (GitLab, HR, Slack, CV, Jira)",
+      "owner_agent": "developer-agent",
+      "inputs": [
+        "artifacts/requirements.json",
+        "artifacts/architecture.json",
+        "artifacts/api-contracts.json",
+        "artifacts/data-model.json"
+      ],
+      "outputs": [
+        "artifacts/code_spec/T-10-CONNECTORS.json",
+        "src/connectors/__init__.py",
+        "src/connectors/base.py",
+        "src/connectors/gitlab_connector.py",
+        "src/connectors/hr_connector.py",
+        "src/connectors/slack_connector.py",
+        "src/connectors/cv_connector.py",
+        "src/connectors/jira_connector.py"
+      ],
+      "depends_on": [
+        "T-09-ARCH-INGESTION"
+      ],
+      "done_criteria": [
+        "artifacts/code_spec/T-10-CONNECTORS.json validates against schemas/code_spec.schema.json",
+        "BaseConnector abstract class defined in src/connectors/base.py; connector yields SourceDocument records; SourceDocument dataclass/model carries: external_id, display_name, email, cv_text, git_log_text, slack_text, and optional timezone, availability_hours, experience_years, source fields",
+        "Every concrete connector exposes a kind attribute ('file' or 'network') and an availability attribute ('live' or 'credential-gated'); every connector degrades gracefully when credentials are absent, invalid, or the external service is unreachable — no connector raises HTTP 5xx or an unhandled exception",
+        "GitLab connector (src/connectors/gitlab_connector.py): implemented using httpx (not python-gitlab); pulls commit messages and merge-request titles into git_log_text; supports optional token and configurable base_url (default https://gitlab.com); respects per-request timeout and configurable GITLAB_MAX_PAGES page cap; missing or invalid token returns a degraded SourceDocument result, never an exception or HTTP 5xx [AC19]",
+        "HR connector (src/connectors/hr_connector.py): parses CSV or JSON file from in-memory bytes; case-insensitive and tolerant column mapping: name→display_name, email→email, title/role/bio→cv_text (skills appended), weekly_hours→availability_hours, years_experience→experience_years, timezone→timezone; yields one SourceDocument per employee row [AC17]",
+        "Slack connector (src/connectors/slack_connector.py): parses Slack export JSON from in-memory bytes; aggregates each user's channel messages into slack_text; yields one SourceDocument per user found in the export [AC18]",
+        "CV connector (src/connectors/cv_connector.py): parses a single .txt or .md file into cv_text yielding one SourceDocument; optional PDF support guarded by a conditional import (PyMuPDF or pdfminer); when PDF library is unavailable the connector reports itself as unavailable rather than raising an exception [AC15, AC16]",
+        "Jira connector (src/connectors/jira_connector.py): reads assigned issues, labels, and comments from Jira REST API via httpx; populates git_log_text; exposes interface documenting required credentials (base_url, email, token, project_key); missing credentials return a degraded IngestionSummary with errors list documenting what is required, never HTTP 5xx [AC20]",
+        "All connector files are new; no existing Phase-1 source files are modified by this task"
+      ]
+    },
+    {
+      "task_id": "T-11-INGESTION-API",
+      "title": "Backend: Ingestion API Endpoints, ETL Orchestrator, Shared create-plus-embed Helper, and Settings (in-place merge of src/api/developers.py, src/core/settings.py, .env.example)",
+      "owner_agent": "developer-agent",
+      "inputs": [
+        "artifacts/requirements.json",
+        "artifacts/architecture.json",
+        "artifacts/api-contracts.json",
+        "artifacts/code_spec/T-10-CONNECTORS.json",
+        "src/connectors/",
+        "src/api/developers.py",
+        "src/core/settings.py",
+        "src/core/auth.py"
+      ],
+      "outputs": [
+        "artifacts/code_spec/T-11-INGESTION-API.json",
+        "src/api/ingestion.py",
+        "src/etl/__init__.py",
+        "src/etl/orchestrator.py",
+        "src/core/helpers.py",
+        "src/api/developers.py",
+        "src/core/settings.py",
+        ".env.example"
+      ],
+      "depends_on": [
+        "T-09-ARCH-INGESTION",
+        "T-10-CONNECTORS"
+      ],
+      "done_criteria": [
+        "artifacts/code_spec/T-11-INGESTION-API.json validates against schemas/code_spec.schema.json",
+        "GET /api/v1/ingestion/connectors returns HTTP 200 with a JSON array containing ≥5 ConnectorInfo descriptors (gitlab, hr, slack, cv, jira); each descriptor includes kind ('file' or 'network') and availability ('live' or 'credential-gated'); endpoint secured by require_manager dependency from src/core/auth.py [AC14]",
+        "POST /api/v1/ingestion/file accepts multipart upload (file + source + mode); enforces MAX_UPLOAD_BYTES before any parsing — requests exceeding the limit receive HTTP 413; no data written to disk at any point [AC22]",
+        "POST /api/v1/ingestion/gitlab accepts JSON body (username, project, optional base_url, optional token, mode); delegates to GitLab connector [AC19]",
+        "POST /api/v1/ingestion/jira accepts JSON body (base_url, email, token, project_key, usernames, mode); delegates to Jira connector; missing or invalid credentials return HTTP 200 with degraded IngestionSummary (errors list), never HTTP 5xx [AC20]",
+        "All /api/v1/ingestion/* endpoints use require_manager dependency from src/core/auth.py; developer-role JWTs receive HTTP 403; unauthenticated requests receive HTTP 401 [AC21]",
+        "Shared create-plus-embed helper extracted into src/core/helpers.py (new file); src/api/developers.py updated in-place to import and call the shared helper; POST /api/v1/developers and commit-mode ingestion share a single code path with no duplication [AC16, AC23]",
+        "ETL orchestrator (src/etl/orchestrator.py) calls enrich_profile(cv_text, git_log_text, slack_text) for each SourceDocument via asyncio.to_thread; records where enrich_profile returns empty skills list are counted in IngestionSummary.skipped and no DeveloperProfile row is created; remaining records in the batch continue processing and HTTP response is 200 [AC23, AC24]",
+        "IngestionSummary provenance object populated with llm and heuristic integer counts derived from EnrichmentResult.provenance for each enriched record; provenance.llm + provenance.heuristic equals enriched count [AC25]",
+        "Preview mode (mode=preview): returns IngestionSummary with drafts for human review; IngestionSummary.created equals 0; no DeveloperProfile row persisted [AC15]",
+        "Commit mode (mode=commit): creates DeveloperProfile rows via the shared create-plus-embed helper; enqueues embeddings asynchronously via BackgroundTasks; IngestionSummary.created ≥1 for successful ingestion [AC16]",
+        "INGESTION_MAX_RECORDS batch cap (default 500) enforced before processing begins; batches exceeding the cap are truncated with a note in IngestionSummary.errors",
+        "src/core/settings.py updated in-place to add: GITLAB_BASE_URL (default https://gitlab.com), GITLAB_TOKEN (default empty string), JIRA_BASE_URL (default empty string), JIRA_EMAIL (default empty string), JIRA_TOKEN (default empty string), MAX_UPLOAD_BYTES (default 10485760), INGESTION_MAX_RECORDS (default 500), GITLAB_MAX_PAGES (default 10) [AC28]",
+        ".env.example updated in-place to document all eight new environment variables with safe defaults and inline comments [AC28]"
+      ]
+    },
+    {
+      "task_id": "T-12-INGESTION-FRONTEND",
+      "title": "Frontend: Ingestion Page and Multipart Client Helper (in-place merge of frontend/src/api/client.ts)",
+      "owner_agent": "developer-agent",
+      "inputs": [
+        "artifacts/requirements.json",
+        "artifacts/architecture.json",
+        "artifacts/api-contracts.json",
+        "frontend/src/api/client.ts",
+        "frontend/src/App.tsx"
+      ],
+      "outputs": [
+        "artifacts/code_spec/T-12-INGESTION-FRONTEND.json",
+        "frontend/src/pages/IngestionPage.tsx",
+        "frontend/src/components/ConnectorPicker.tsx",
+        "frontend/src/components/DraftReviewTable.tsx",
+        "frontend/src/api/client.ts"
+      ],
+      "depends_on": [
+        "T-09-ARCH-INGESTION"
+      ],
+      "done_criteria": [
+        "artifacts/code_spec/T-12-INGESTION-FRONTEND.json validates against schemas/code_spec.schema.json",
+        "IngestionPage (frontend/src/pages/IngestionPage.tsx) rendered exclusively for manager-role sessions; wired into existing tab pattern without react-router, matching the convention used by ManagerDashboard and other existing pages [AC26]",
+        "ConnectorPicker component (frontend/src/components/ConnectorPicker.tsx) populated from GET /api/v1/ingestion/connectors; credential-gated connectors (availability == 'credential-gated') rendered as disabled with a tooltip stating required credentials [AC26]",
+        "File dropzone within IngestionPage accepts CSV, JSON, TXT, MD files for file-kind connectors; file selection invokes POST /api/v1/ingestion/file with multipart body [AC26]",
+        "GitLab input form renders fields: username (required), project (optional), token (optional); Jira input form renders fields: base_url (required), email (required), token (required), project_key (required), usernames (required) [AC26]",
+        "Preview button posts selected source data in mode=preview and renders the returned IngestionSummary.drafts in a scrollable DraftReviewTable component [AC26]",
+        "Approve and Create button re-posts in mode=commit; shows updated IngestionSummary.created count to user upon completion [AC26]",
+        "All interactive elements (connector picker, file dropzone, GitLab fields, Jira fields, preview button, approve-and-create button) carry data-testid attributes following the existing codebase naming pattern [AC26]",
+        "Multipart-capable request helper (uploadFile or equivalent) added to frontend/src/api/client.ts via in-place merge; existing client functions are not altered [AC26]",
+        "Frontend build completes without errors after the merge"
+      ]
+    },
+    {
+      "task_id": "T-13-REVIEW-INGESTION",
+      "title": "Code Review: Data Pipeline & Ingestion Increment",
+      "owner_agent": "reviewer-agent",
+      "inputs": [
+        "artifacts/code_spec/T-10-CONNECTORS.json",
+        "artifacts/code_spec/T-11-INGESTION-API.json",
+        "artifacts/code_spec/T-12-INGESTION-FRONTEND.json",
+        "artifacts/architecture.json",
+        "artifacts/api-contracts.json",
+        "src/connectors/",
+        "src/api/ingestion.py",
+        "src/etl/",
+        "src/core/helpers.py",
+        "src/api/developers.py",
+        "src/core/settings.py",
+        ".env.example",
+        "frontend/src/pages/IngestionPage.tsx",
+        "frontend/src/components/ConnectorPicker.tsx",
+        "frontend/src/components/DraftReviewTable.tsx",
+        "frontend/src/api/client.ts"
+      ],
+      "outputs": [
+        "artifacts/review_report_ingestion.json"
+      ],
+      "depends_on": [
+        "T-10-CONNECTORS",
+        "T-11-INGESTION-API",
+        "T-12-INGESTION-FRONTEND"
+      ],
+      "done_criteria": [
+        "artifacts/review_report_ingestion.json validates against schemas/review_report.schema.json",
+        "Graceful degradation verified for all five connectors: missing/invalid GitLab token returns degraded result (never HTTP 5xx); Jira missing credentials returns HTTP 200 with errors list; HR/Slack/CV parse failures degrade per-record without aborting the batch [AC19, AC20]",
+        "Auth enforcement verified: require_manager from src/core/auth.py applied to every /api/v1/ingestion/* route; developer-role path returns HTTP 403; unauthenticated path returns HTTP 401 [AC21]",
+        "File upload memory safety verified: MAX_UPLOAD_BYTES guard applied before any parsing; no disk writes in any connector or endpoint; HTTP 413 returned for oversized payloads [AC22]",
+        "Shared create-plus-embed helper verified: src/core/helpers.py contains the shared function; both src/api/developers.py (POST /api/v1/developers) and src/etl/orchestrator.py (commit mode) import and call the same helper; no duplication [AC16, AC23]",
+        "ETL orchestrator reviewed: asyncio.to_thread wraps enrich_profile calls correctly; records with empty skills list are counted in IngestionSummary.skipped and skipped from DeveloperProfile creation; provenance.llm + provenance.heuristic equals enriched count [AC23, AC24, AC25]",
+        "Preview vs commit mode boundary verified: preview mode creates zero DeveloperProfile rows and returns drafts only; commit mode persists via shared helper and enqueues embeddings via BackgroundTasks [AC15, AC16]",
+        "Frontend Ingestion page reviewed: manager-role guard present; connector picker disabled for credential-gated entries with tooltip; all data-testid attributes present; multipart client helper added without breaking existing client.ts functions [AC26]",
+        "Constraint confirmed: no existing Phase-1 test file modified by T-10 or T-11; all new tests are fully mocked and offline; 120 existing tests must remain green",
+        "verdict field in artifacts/review_report_ingestion.json is one of: approved, approved_with_comments, rejected"
+      ]
+    },
+    {
+      "task_id": "T-14-QA-INGESTION",
+      "title": "QA: Test Planning & Execution for Data Pipeline & Ingestion Increment",
+      "owner_agent": "qa-agent",
+      "inputs": [
+        "artifacts/requirements.json",
+        "artifacts/api-contracts.json",
+        "artifacts/code_spec/T-10-CONNECTORS.json",
+        "artifacts/code_spec/T-11-INGESTION-API.json",
+        "artifacts/code_spec/T-12-INGESTION-FRONTEND.json",
+        "artifacts/review_report_ingestion.json",
+        "src/connectors/",
+        "src/api/ingestion.py",
+        "src/etl/",
+        "src/core/helpers.py",
+        "src/core/settings.py",
+        "frontend/src/pages/IngestionPage.tsx"
+      ],
+      "outputs": [
+        "artifacts/test_plan_ingestion.json",
+        "tests/test_connectors.py",
+        "tests/test_ingestion_api.py",
+        "tests/test_ingestion_auth.py",
+        "tests/integration/test_ingestion_pipeline.py"
+      ],
+      "depends_on": [
+        "T-13-REVIEW-INGESTION"
+      ],
+      "done_criteria": [
+        "artifacts/test_plan_ingestion.json validates against schemas/test_plan.schema.json",
+        "GET /ingestion/connectors test: returns HTTP 200 with ≥5 ConnectorInfo entries each having kind and availability; HTTP 403 for developer-role JWT; HTTP 401 for unauthenticated request [AC14]",
+        "POST /ingestion/file CV preview test: source=cv, valid UTF-8 .txt body, mode=preview returns HTTP 200; IngestionSummary.created == 0; at least one draft entry in response [AC15]",
+        "POST /ingestion/file CV commit test: source=cv, valid UTF-8 .txt body, mode=commit returns HTTP 200; IngestionSummary.created ≥1; DeveloperProfile persisted via shared helper (verified through MockAsyncSession.added); embeddings enqueued via BackgroundTasks mock [AC16]",
+        "POST /ingestion/file HR CSV column-mapping test: source=hr, valid CSV payload returns one draft per employee row; case-insensitive column names title/role/bio→cv_text, weekly_hours→availability_hours, years_experience→experience_years handled correctly [AC17]",
+        "POST /ingestion/file Slack JSON test: source=slack, valid Slack export JSON returns one draft per user; user channel messages concatenated as slack_text [AC18]",
+        "POST /ingestion/gitlab mock-transport test: mock httpx transport returning commit and MR data → HTTP 200 with IngestionSummary.drafts[0].git_log_text containing mocked commit messages and MR titles; called without token (or with invalid token) → HTTP 200 with degraded (empty or partial) IngestionSummary, never HTTP 5xx [AC19]",
+        "POST /ingestion/jira missing-credentials test: request with missing or invalid credentials → HTTP 200 with IngestionSummary.errors containing a message documenting the missing credential; endpoint never returns HTTP 5xx regardless of credential state [AC20]",
+        "Auth boundary tests: all /api/v1/ingestion/* endpoints return HTTP 403 for developer-role JWT and HTTP 401 for unauthenticated request; manager-role JWT accepted for all operations [AC21]",
+        "HTTP 413 upload-size test: file body exceeding MAX_UPLOAD_BYTES returns HTTP 413 with structured error body; no DeveloperProfile created; no disk writes occurred [AC22]",
+        "enrich_profile skipped-record test: when enrich_profile returns empty skills list for a SourceDocument that record is counted in IngestionSummary.skipped; all other records in the same batch continue processing; HTTP response is still 200 [AC24]",
+        "IngestionSummary.provenance test: provenance.llm + provenance.heuristic equals IngestionSummary.enriched for a multi-record batch with mixed EnrichmentResult.provenance values [AC25]",
+        "End-to-end integration test (tests/integration/test_ingestion_pipeline.py): HR CSV connector extraction yields one SourceDocument per row → enrich_profile mocked to return deterministic EnrichmentResult → commit mode persists DeveloperProfile rows (verified via MockAsyncSession.added) → embeddings enqueued (verified via BackgroundTasks mock); all HTTP calls use mock httpx transport; no live database or external API connections required; test passes in CI alongside all 120 existing tests which remain green [AC27]",
+        "All new tests (test_connectors.py, test_ingestion_api.py, test_ingestion_auth.py, test_ingestion_pipeline.py) are fully mocked and offline; GitLab and Jira HTTP interactions use mock httpx transport; file connectors tested from in-memory bytes",
+        "artifacts/test_plan_ingestion.json summary.failed == 0"
+      ]
+    },
+    {
+      "task_id": "T-15-DEPLOY-INGESTION",
+      "title": "Deployment & Release: Data Pipeline & Ingestion Increment",
+      "owner_agent": "devops-agent",
+      "inputs": [
+        "artifacts/review_report_ingestion.json",
+        "artifacts/test_plan_ingestion.json",
+        "artifacts/code_spec/T-10-CONNECTORS.json",
+        "artifacts/code_spec/T-11-INGESTION-API.json",
+        "artifacts/code_spec/T-12-INGESTION-FRONTEND.json",
+        "artifacts/architecture.json",
+        "artifacts/api-contracts.json",
+        "src/",
+        "frontend/src/",
+        "tests/"
+      ],
+      "outputs": [
+        "artifacts/release_report_ingestion.json"
+      ],
+      "depends_on": [
+        "T-13-REVIEW-INGESTION",
+        "T-14-QA-INGESTION"
+      ],
+      "done_criteria": [
+        "artifacts/release_report_ingestion.json validates against schemas/release_report.schema.json",
+        "artifacts/review_report_ingestion.json verdict confirmed to be one of {approved, approved_with_comments} before deployment proceeds",
+        "artifacts/test_plan_ingestion.json summary.failed confirmed to be 0 before deployment proceeds",
+        "Updated FastAPI backend (including all ingestion endpoints and connectors) starts successfully and health-check endpoint responds with HTTP 200",
+        "GET /api/v1/ingestion/connectors accessible and returns ≥5 descriptors in the deployed environment",
+        "Updated React frontend (with IngestionPage) builds without errors and is served correctly; Ingestion tab visible for manager-role sessions",
+        "Full test suite (120 existing tests + new ingestion tests) passes in CI; no regressions introduced",
+        ".env.example documents all eight new environment variables (GITLAB_BASE_URL, GITLAB_TOKEN, JIRA_BASE_URL, JIRA_EMAIL, JIRA_TOKEN, MAX_UPLOAD_BYTES, INGESTION_MAX_RECORDS, GITLAB_MAX_PAGES) with safe defaults [AC28]",
+        "Deployment is reproducible via updated runbook or Dockerfile/compose file referenced in release_report_ingestion.json"
+      ]
+    },
+    {
+      "task_id": "T-16-E2E",
+      "title": "End-to-End Browser Validation: Ingestion Page (Manager Role)",
+      "owner_agent": "e2e-agent",
+      "inputs": [
+        "artifacts/release_report_ingestion.json",
+        "artifacts/api-contracts.json",
+        "frontend/src/pages/IngestionPage.tsx",
+        "frontend/src/components/ConnectorPicker.tsx",
+        "frontend/src/components/DraftReviewTable.tsx"
+      ],
+      "outputs": [
+        "artifacts/e2e_report.json"
+      ],
+      "depends_on": [
+        "T-15-DEPLOY-INGESTION"
+      ],
+      "done_criteria": [
+        "artifacts/e2e_report.json validates against schemas/e2e_report.schema.json",
+        "Manager-role login navigates to Ingestion tab without page errors; tab visible and accessible only for manager-role sessions [AC26]",
+        "ConnectorPicker populated with ≥5 connector entries from GET /api/v1/ingestion/connectors; credential-gated connectors rendered as disabled with tooltip text visible on hover [AC26]",
+        "File dropzone visible and accepts CSV, JSON, TXT, MD files for file-kind connectors; file selection triggers multipart POST /api/v1/ingestion/file [AC26]",
+        "GitLab input form renders with username, project, and token fields and correct data-testid attributes; Jira form renders with base_url, email, token, project_key, usernames fields and correct data-testid attributes [AC26]",
+        "Preview button triggers mode=preview request and DraftReviewTable renders returned drafts in a scrollable table with at least one row [AC26]",
+        "Approve and Create button triggers mode=commit request and UI displays updated IngestionSummary.created count upon completion [AC26]",
+        "All data-testid attributes on interactive elements are present and correct as declared in T-12-INGESTION-FRONTEND code spec [AC26]",
+        "No console errors or unhandled promise rejections during any of the above interactions",
+        "artifacts/e2e_report.json verdict is one of: passed, passed_with_warnings"
       ]
     }
   ]

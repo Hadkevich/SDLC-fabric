@@ -1,0 +1,59 @@
+{
+  "spec_version": "v1",
+  "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
+  "task_id": "T-13-REVIEW-INGESTION",
+  "reviewer": "reviewer-agent",
+  "verdict": "approved_with_comments",
+  "blocking_issues": [],
+  "non_blocking_issues": [
+    {
+      "id": "NBL-001",
+      "category": "contract_violation",
+      "description": "JiraIngestionRequest in src/api/ingestion.py declares base_url, email, token, and project_key as required (Field(...)). The api-contracts.json JiraIngestionRequest schema deliberately defines NO required fields ('none of the credential fields are mandatory at the schema level') and documents that each defaults to its JIRA_* env var and that missing/invalid credentials must return HTTP 200 with a degraded IngestionSummary.errors. With the current model, a request that omits any credential (or sends null) is rejected by FastAPI with HTTP 422 instead of the contract/AC20-specified HTTP 200 + errors list. The hard safety guarantee (never HTTP 5xx) still holds, and the canonical contract example case (token=\"\" empty string, other fields present) is handled correctly by JiraConnector._validate_credentials -> HTTP 200 + errors, which is why this is non-blocking; but absent/null fields diverge from the documented degradation behavior.",
+      "file_ref": "src/api/ingestion.py",
+      "line_ref": 96,
+      "suggestion": "Make base_url/email/token/project_key Optional[str] with default None, fall back to settings.jira_base_url/jira_email/jira_token when omitted, and let JiraConnector._validate_credentials() surface missing fields as IngestionSummary.errors (HTTP 200). This also wires up the JIRA_* settings that are currently defined but unused (AC28 env-fallback intent)."
+    },
+    {
+      "id": "NBL-002",
+      "category": "test_coverage",
+      "description": "All ingestion test suites referenced by T-10/T-11/T-12 (tests/test_connectors.py, tests/test_ingestion_api.py, tests/test_ingestion_auth.py, tests/integration/test_ingestion_pipeline.py) are declared 'to be created by T-14-QA-INGESTION' and do not yet exist. The critical degradation paths (GitLab 401/429, Jira missing credentials, CV missing PDF backend, HR/Slack malformed rows), the auth boundaries (403 developer / 401 unauthenticated), the HTTP 413 guard, and the provenance.llm+heuristic==enriched invariant are therefore currently unverified by automated tests. Per the review rubric an untested edge case is a non-blocking issue; T-14 is the dedicated QA task that must close this before the deployment gate (test_plan.json summary.failed == 0).",
+      "file_ref": "artifacts/code_spec/T-11-INGESTION-API.json",
+      "suggestion": "Ensure T-14-QA-INGESTION delivers the fully-mocked, offline tests for every documented degradation and auth path and confirm summary.failed == 0 before the deployment gate."
+    },
+    {
+      "id": "NBL-003",
+      "category": "maintainability",
+      "description": "In src/connectors/jira_connector.py _fetch_all_assignees() computes a real 'email' from assignee.get('emailAddress') (or a fallback) but then discards it: the yielded SourceDocument hardcodes email=f\"{uid.lower()}@jira.example\" instead of using the resolved 'email' variable. The result is an unused local variable and the loss of the genuine assignee email address that was available from the Jira payload.",
+      "file_ref": "src/connectors/jira_connector.py",
+      "line_ref": 367,
+      "suggestion": "Use the already-computed 'email' value in the yielded SourceDocument (email=email) so real assignee emails are preserved and the unused variable is eliminated."
+    },
+    {
+      "id": "NBL-004",
+      "category": "security",
+      "description": "AC22 is satisfied at the application-code level: src/api/ingestion.py reads the upload into memory, enforces settings.max_upload_bytes BEFORE any connector parsing (HTTP 413 on exceed), and neither the endpoint nor any connector writes to disk. Note for completeness: Starlette's UploadFile backs the multipart body with a SpooledTemporaryFile that rolls over to a temp file on disk once it exceeds its in-memory threshold, so for bodies between that threshold and MAX_UPLOAD_BYTES the framework itself may spool to disk before the size check runs. This is framework behavior outside the reviewed code and is already acknowledged in the T-11 known_limitations.",
+      "file_ref": "src/api/ingestion.py",
+      "line_ref": 190,
+      "suggestion": "Optional hardening: short-circuit oversized uploads using the Content-Length header before reading the body, and/or stream-read with an incremental byte cap, to avoid any framework-level disk spooling for large rejected payloads."
+    },
+    {
+      "id": "NBL-005",
+      "category": "maintainability",
+      "description": "frontend/src/api/client.ts uploadFile() intentionally bypasses the shared request() helper (correct, so the browser can set the multipart/form-data boundary), but as a consequence it does not inherit the silent 401 -> token-refresh -> retry-once logic that all other client calls have. A token that expires mid-session will surface a hard ApiClientError(401) on file upload rather than transparently refreshing.",
+      "file_ref": "frontend/src/api/client.ts",
+      "line_ref": 503,
+      "suggestion": "Optionally factor the refresh-on-401 retry into a small wrapper reused by uploadFile() (still letting the browser set the multipart boundary) for behavioral consistency with the rest of the client."
+    },
+    {
+      "id": "NBL-006",
+      "category": "test_coverage",
+      "description": "The in-place refactor of POST /api/v1/developers (src/api/developers.py) to route creation through the shared create_developer_profile() helper changes which _enqueue_embeddings reference the create path schedules: it is now the src.core.helpers function invoked inside the helper module, not the name bound in src.api.developers. Any existing Phase-1 test that monkeypatched src.api.developers._enqueue_embeddings to assert the POST /developers create path enqueues embeddings would no longer observe that call (the PUT/update path still uses the developers-module name and is unaffected). This is a regression risk for the stated '120 existing tests must remain green' constraint that cannot be confirmed without executing the suite.",
+      "file_ref": "src/api/developers.py",
+      "line_ref": 183,
+      "suggestion": "Run the full existing test suite (T-14/QA) and confirm 120 tests stay green; if any test patched src.api.developers._enqueue_embeddings for the create path, update it to patch src.core.helpers._enqueue_embeddings."
+    }
+  ],
+  "summary": "Reviewed the Data Pipeline & Ingestion increment (T-10 connectors, T-11 ingestion API + ETL orchestrator + shared helper + settings, T-12 frontend) against api-contracts.json, architecture.json, and the task done-criteria. All core acceptance criteria are met: (AC19/AC20/AC30) all five connectors degrade gracefully and never raise/return HTTP 5xx — GitLab handles 401/429/network and always yields a degraded SourceDocument, Jira validates credentials before any network call and yields zero records + errors, HR/Slack/CV degrade per-record in memory; (AC21) require_manager is applied to every /api/v1/ingestion/* route (401 unauthenticated, 403 developer-role); (AC22) MAX_UPLOAD_BYTES is enforced before any parsing with HTTP 413 and no disk writes in endpoint/connector code; (AC16/AC23) src/core/helpers.create_developer_profile is the single create-plus-embed path imported by both src/api/developers.py and src/etl/orchestrator.py with no duplication; (AC23/AC24/AC25) the orchestrator wraps enrich_profile in asyncio.to_thread, counts empty-skills records in skipped and excludes them from creation, and maintains provenance.llm + provenance.heuristic == enriched; (AC15/AC16) preview mode persists nothing (created=0, db/background_tasks=None) while commit mode persists via the shared helper and enqueues embeddings via BackgroundTasks; (AC26) the manager-only Ingestion page guards on session.role==='manager', the ConnectorPicker disables credential-gated entries with a required-credentials tooltip, all declared data-testid attributes are present, and uploadFile() adds a multipart helper without altering existing client.ts functions. Scope is clean — changes stay within the files listed across the three code_specs (including the T-11-owned src/main.py router registration). No blocking issues found. Six non-blocking items are recorded: the most material is NBL-001, a JiraIngestionRequest schema deviation (required fields + unused JIRA_* env fallback) that makes absent-credential requests return HTTP 422 instead of the contract/AC20-specified HTTP 200 + degraded summary — the never-5xx guarantee and the canonical empty-string-token case still behave correctly, so work can proceed, but the request schema should be relaxed to match the contract. The remaining items cover pending T-14 test coverage, a discarded real Jira email, framework-level multipart spooling, the uploadFile 401-refresh gap, and a refactor-induced regression risk for the existing 120-test suite to verify in QA.",
+  "reviewed_at": "2026-06-28T00:00:00Z"
+}

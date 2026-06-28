@@ -31,7 +31,8 @@
     { "name": "analytics",  "description": "Feedback collection and rejection-rate analytics" },
     { "name": "risk",       "description": "Team-level risk aggregation and batch refresh" },
     { "name": "admin",      "description": "GDPR erasure audit and re-embedding triggers (manager role)" },
-    { "name": "health",     "description": "Liveness and readiness probes" }
+    { "name": "health",     "description": "Liveness and readiness probes" },
+    { "name": "ingestion",  "description": "Manager-only data ingestion from source connectors (file + network) in preview/commit modes (AC29/AC30)" }
   ],
   "paths": {
     "/health": {
@@ -1147,6 +1148,245 @@
           }
         }
       }
+    },
+    "/ingestion/connectors": {
+      "get": {
+        "tags": ["ingestion"],
+        "summary": "List available ingestion connectors",
+        "description": "Returns a JSON array of ConnectorInfo descriptors for the five source connectors (gitlab, hr, slack, cv, jira). Each descriptor includes at minimum kind ('file'|'network') and availability ('live'|'credential-gated'). The frontend uses this to render the connector picker, disabling credential-gated connectors with a required-credentials tooltip. Restricted to the manager role via the require_manager dependency: developer-role JWTs receive HTTP 403 and unauthenticated callers receive HTTP 401.",
+        "operationId": "listIngestionConnectors",
+        "responses": {
+          "200": {
+            "description": "List of connector descriptors (≥ 5 entries: gitlab, hr, slack, cv, jira)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ConnectorInfo" }
+                },
+                "example": [
+                  { "source": "gitlab", "display_name": "GitLab", "kind": "network", "availability": "live", "description": "Pull commit messages and merge-request titles into git_log_text", "required_credentials": [], "accepted_file_types": [] },
+                  { "source": "hr", "display_name": "HR Export", "kind": "file", "availability": "live", "description": "Parse a CSV/JSON HR export into one profile per employee row", "required_credentials": [], "accepted_file_types": [".csv", ".json"] },
+                  { "source": "slack", "display_name": "Slack Export", "kind": "file", "availability": "live", "description": "Aggregate each user's messages into slack_text", "required_credentials": [], "accepted_file_types": [".json"] },
+                  { "source": "cv", "display_name": "CV Document", "kind": "file", "availability": "live", "description": "Parse a .txt/.md (optionally .pdf) CV into cv_text", "required_credentials": [], "accepted_file_types": [".txt", ".md", ".pdf"] },
+                  { "source": "jira", "display_name": "Jira", "kind": "network", "availability": "credential-gated", "description": "Read assigned issues, labels, and comments into git_log_text", "required_credentials": ["base_url", "email", "token", "project_key"], "accepted_file_types": [] }
+                ]
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — valid JWT required (no/invalid token)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required; developer-role JWTs are rejected",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/ingestion/file": {
+      "post": {
+        "tags": ["ingestion"],
+        "summary": "Ingest developer profiles from an uploaded file",
+        "description": "Multipart upload for file-kind connectors (source ∈ {cv, hr, slack}). The file is processed entirely in memory (never written to disk). mode=preview returns an IngestionSummary with drafts and creates nothing (created=0); mode=commit persists DeveloperProfile rows via the shared create-plus-embed helper and enqueues embeddings via BackgroundTasks. Bodies exceeding MAX_UPLOAD_BYTES (default 10 MB) are rejected with HTTP 413 before any parsing. Restricted to the manager role: HTTP 403 for developer-role JWTs, HTTP 401 when unauthenticated.",
+        "operationId": "ingestFile",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file", "source", "mode"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The uploaded document (CSV/JSON/TXT/MD). Parsed in memory only; never written to disk."
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": ["cv", "hr", "slack"],
+                    "description": "File-kind connector to use"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": ["preview", "commit"],
+                    "default": "preview",
+                    "description": "preview = drafts only, creates nothing (created=0); commit = persist DeveloperProfile rows via the shared create-plus-embed helper"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ingestion completed (possibly degraded — degraded outcomes are listed in IngestionSummary.errors, never raised as 5xx)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/IngestionSummary" },
+                "example": {
+                  "extracted": 3,
+                  "enriched": 3,
+                  "skipped": 0,
+                  "created": 0,
+                  "provenance": { "llm": 2, "heuristic": 1 },
+                  "errors": [],
+                  "drafts": [
+                    { "external_id": "emp-001", "display_name": "Ada Lovelace", "email": "ada@example.com", "source": "hr", "skills": ["Python", "Analytics"], "cv_text": "Senior engineer ...", "git_log_text": null, "slack_text": null, "timezone": "Europe/London", "availability_hours": 40, "experience_years": 9, "provenance": "llm" }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request (missing file/source/mode or unsupported source)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Unauthorized — valid JWT required (no/invalid token)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required; developer-role JWTs are rejected",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "413": {
+            "description": "Payload too large — body exceeds MAX_UPLOAD_BYTES; nothing was parsed and nothing was written to disk",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": {
+                  "error_code": "PAYLOAD_TOO_LARGE",
+                  "message": "Upload exceeds MAX_UPLOAD_BYTES (10485760). No data was processed.",
+                  "request_id": "req_ing001"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation error (e.g. invalid mode or source value)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/ingestion/gitlab": {
+      "post": {
+        "tags": ["ingestion"],
+        "summary": "Ingest a developer profile from GitLab activity",
+        "description": "Pulls commit messages and merge-request titles for a username into git_log_text via a read-only httpx client. A missing or invalid token (or hitting the GITLAB_MAX_PAGES cap / a 429) yields a degraded (empty or partial) IngestionSummary with an errors entry — never HTTP 5xx. mode=preview returns drafts; mode=commit persists via the shared create-plus-embed helper. Restricted to the manager role: HTTP 403 for developer-role JWTs, HTTP 401 when unauthenticated.",
+        "operationId": "ingestGitlab",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/GitlabIngestionRequest" },
+              "example": {
+                "username": "ada",
+                "project": "platform/core",
+                "base_url": "https://gitlab.com",
+                "token": "",
+                "mode": "preview"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ingestion completed (degraded result if the token is missing/invalid or the request was rate-limited — see IngestionSummary.errors)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/IngestionSummary" }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request body",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Unauthorized — valid JWT required (no/invalid token)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required; developer-role JWTs are rejected",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "413": {
+            "description": "Payload too large — request body exceeds MAX_UPLOAD_BYTES",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "422": {
+            "description": "Validation error (e.g. missing username)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/ingestion/jira": {
+      "post": {
+        "tags": ["ingestion"],
+        "summary": "Ingest developer profiles from Jira activity",
+        "description": "Reads assigned issues, labels, and comments into git_log_text via a read-only httpx client. Credential-gated: missing or invalid credentials (base_url, email, token, project_key) return HTTP 200 with an IngestionSummary whose errors list documents the missing/invalid credential — never HTTP 5xx. mode=preview returns drafts; mode=commit persists via the shared create-plus-embed helper. Restricted to the manager role: HTTP 403 for developer-role JWTs, HTTP 401 when unauthenticated.",
+        "operationId": "ingestJira",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/JiraIngestionRequest" },
+              "example": {
+                "base_url": "https://org.atlassian.net",
+                "email": "manager@example.com",
+                "token": "",
+                "project_key": "NS",
+                "usernames": ["ada", "grace"],
+                "mode": "preview"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ingestion completed (degraded result documenting missing/invalid credentials or rate-limiting in IngestionSummary.errors)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/IngestionSummary" },
+                "example": {
+                  "extracted": 0,
+                  "enriched": 0,
+                  "skipped": 0,
+                  "created": 0,
+                  "provenance": { "llm": 0, "heuristic": 0 },
+                  "errors": ["Jira credentials incomplete: token is required (base_url, email, token, project_key)"],
+                  "drafts": []
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request body",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Unauthorized — valid JWT required (no/invalid token)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager role required; developer-role JWTs are rejected",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "413": {
+            "description": "Payload too large — request body exceeds MAX_UPLOAD_BYTES",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "422": {
+            "description": "Validation error (e.g. invalid mode value)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1189,7 +1429,7 @@
         "properties": {
           "error_code": {
             "type": "string",
-            "description": "Machine-readable error code. Examples: NOT_FOUND, INVALID_WEIGHTS, VALIDATION_ERROR, ERASURE_FAILED, SERVICE_UNAVAILABLE, FORBIDDEN, UNAUTHORIZED, CONFLICT"
+            "description": "Machine-readable error code. Examples: NOT_FOUND, INVALID_WEIGHTS, VALIDATION_ERROR, ERASURE_FAILED, SERVICE_UNAVAILABLE, FORBIDDEN, UNAUTHORIZED, CONFLICT, PAYLOAD_TOO_LARGE"
           },
           "message": {
             "type": "string",
@@ -1980,6 +2220,143 @@
             "type": ["integer", "null"],
             "description": "Estimated number of records to be processed (informational)"
           }
+        }
+      },
+      "ConnectorInfo": {
+        "type": "object",
+        "description": "Descriptor for a single ingestion connector, returned by GET /ingestion/connectors. Drives the frontend connector picker; credential-gated connectors are rendered disabled with a required-credentials tooltip.",
+        "required": ["source", "kind", "availability"],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": ["gitlab", "hr", "slack", "cv", "jira"],
+            "description": "Connector identifier; used as the 'source' value in ingestion requests"
+          },
+          "display_name": {
+            "type": "string",
+            "description": "Human-readable connector name for the UI"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["file", "network"],
+            "description": "'file' = parses an uploaded document in memory; 'network' = calls an external API via httpx"
+          },
+          "availability": {
+            "type": "string",
+            "enum": ["live", "credential-gated"],
+            "description": "'live' = usable immediately; 'credential-gated' = requires configured credentials before use"
+          },
+          "description": {
+            "type": "string",
+            "description": "Short explanation of what the connector ingests"
+          },
+          "required_credentials": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Names of credentials required when availability='credential-gated' (e.g. base_url, email, token, project_key); empty for 'live' connectors"
+          },
+          "accepted_file_types": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "For kind='file', accepted upload extensions (e.g. ['.csv','.json']); empty for network connectors"
+          }
+        }
+      },
+      "IngestionProvenance": {
+        "type": "object",
+        "description": "Provenance breakdown of enriched records. The sum llm + heuristic equals IngestionSummary.enriched.",
+        "required": ["llm", "heuristic"],
+        "properties": {
+          "llm": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Count of enriched records whose skills were produced by the LLM enrichment path (Google Gemini per requirements)"
+          },
+          "heuristic": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Count of enriched records whose skills were produced by the heuristic fallback path"
+          }
+        }
+      },
+      "IngestionDraft": {
+        "type": "object",
+        "description": "A previewed DeveloperProfile candidate derived from one SourceDocument. Returned in IngestionSummary.drafts for human review in preview mode.",
+        "properties": {
+          "external_id": { "type": ["string", "null"], "description": "Source-system identifier for the person" },
+          "display_name": { "type": ["string", "null"], "description": "Person's display name as extracted from the source" },
+          "email": { "type": ["string", "null"], "description": "Person's email if available" },
+          "source": { "type": "string", "enum": ["gitlab", "hr", "slack", "cv", "jira"], "description": "Connector that produced this draft" },
+          "skills": { "type": "array", "items": { "type": "string" }, "description": "Skills extracted by enrich_profile; an empty list causes the record to be skipped" },
+          "cv_text": { "type": ["string", "null"], "description": "Resume/bio text channel consumed by enrich_profile" },
+          "git_log_text": { "type": ["string", "null"], "description": "Commit/MR/issue text channel consumed by enrich_profile" },
+          "slack_text": { "type": ["string", "null"], "description": "Aggregated chat text channel consumed by enrich_profile" },
+          "timezone": { "type": ["string", "null"], "description": "IANA timezone if extractable" },
+          "availability_hours": { "type": ["integer", "null"], "description": "Weekly available hours if extractable" },
+          "experience_years": { "type": ["integer", "null"], "description": "Years of experience if extractable" },
+          "provenance": { "type": ["string", "null"], "enum": ["llm", "heuristic", null], "description": "Which enrichment path produced this draft's skills" }
+        }
+      },
+      "IngestionSummary": {
+        "type": "object",
+        "description": "Result of an ingestion run (preview or commit) returned by all /ingestion/* write endpoints. In preview mode created=0 and drafts holds the candidate profiles for review; in commit mode created counts persisted DeveloperProfile rows. No connector failure produces HTTP 5xx — degraded outcomes (rate-limit truncation, missing/invalid credentials, unparseable rows) are reported in errors with HTTP 200.",
+        "required": ["extracted", "enriched", "skipped", "created", "provenance", "errors", "drafts"],
+        "properties": {
+          "extracted": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of SourceDocument records yielded by the connector"
+          },
+          "enriched": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of records successfully enriched via enrich_profile; equals provenance.llm + provenance.heuristic"
+          },
+          "skipped": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of records skipped because enrichment yielded no extractable skills; no DeveloperProfile is created for these"
+          },
+          "created": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of DeveloperProfile rows persisted (commit mode only; always 0 in preview mode)"
+          },
+          "provenance": { "$ref": "#/components/schemas/IngestionProvenance" },
+          "errors": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Human-readable messages for degraded outcomes (rate-limit truncation, missing/invalid credentials, unparseable rows, duplicates); a non-empty list never implies HTTP 5xx"
+          },
+          "drafts": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/IngestionDraft" },
+            "description": "Previewed candidate profiles for human review; populated in preview mode (and may be echoed in commit mode)"
+          }
+        }
+      },
+      "GitlabIngestionRequest": {
+        "type": "object",
+        "description": "JSON body for POST /ingestion/gitlab. A missing or invalid token yields a degraded IngestionSummary (HTTP 200), not an error.",
+        "required": ["username"],
+        "properties": {
+          "username": { "type": "string", "minLength": 1, "description": "GitLab username whose commits and merge requests to ingest" },
+          "project": { "type": ["string", "null"], "description": "Optional project path or id to scope the query" },
+          "base_url": { "type": ["string", "null"], "description": "Optional GitLab base URL; defaults to GITLAB_BASE_URL (https://gitlab.com) when omitted" },
+          "token": { "type": ["string", "null"], "description": "Optional personal access token; defaults to GITLAB_TOKEN. Missing/invalid token yields a degraded result, not an error." },
+          "mode": { "type": "string", "enum": ["preview", "commit"], "default": "preview", "description": "preview = drafts only; commit = persist via the shared create-plus-embed helper" }
+        }
+      },
+      "JiraIngestionRequest": {
+        "type": "object",
+        "description": "JSON body for POST /ingestion/jira. Jira is credential-gated: any of base_url/email/token/project_key may be omitted (falling back to JIRA_* env vars). Missing or invalid credentials return HTTP 200 with a degraded IngestionSummary whose errors list documents what is required — never HTTP 5xx — so none of the credential fields are mandatory at the schema level.",
+        "properties": {
+          "base_url": { "type": ["string", "null"], "description": "Jira base URL (e.g. https://org.atlassian.net); defaults to JIRA_BASE_URL when omitted. Required credential — absence yields a degraded summary." },
+          "email": { "type": ["string", "null"], "description": "Jira account email; defaults to JIRA_EMAIL. Required credential — absence yields a degraded summary." },
+          "token": { "type": ["string", "null"], "description": "Jira API token; defaults to JIRA_TOKEN. Required credential — missing/invalid yields a degraded summary, never HTTP 5xx." },
+          "project_key": { "type": ["string", "null"], "description": "Jira project key to scope issue retrieval. Required credential — absence yields a degraded summary." },
+          "usernames": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Optional list of usernames to filter issues by assignee" },
+          "mode": { "type": "string", "enum": ["preview", "commit"], "default": "preview", "description": "preview = drafts only; commit = persist via the shared create-plus-embed helper" }
         }
       }
     }

@@ -425,3 +425,133 @@ export async function getTeamRiskSummary(teamId: string): Promise<TeamRiskSummar
 export async function getReallocationSuggestion(developerId: string): Promise<ReallocationSuggestion> {
   return request<ReallocationSuggestion>(`/developers/${developerId}/reallocation-suggestion`);
 }
+
+// ─── Ingestion types (AC26, AC29) ─────────────────────────────────────────────
+
+/** ConnectorInfo descriptor returned by GET /ingestion/connectors. */
+export interface ConnectorInfo {
+  source: 'gitlab' | 'hr' | 'slack' | 'cv' | 'jira';
+  display_name: string;
+  kind: 'file' | 'network';
+  availability: 'live' | 'credential-gated';
+  description?: string;
+  required_credentials?: string[];
+  accepted_file_types?: string[];
+}
+
+export interface IngestionProvenance {
+  llm: number;
+  heuristic: number;
+}
+
+export interface IngestionDraft {
+  external_id: string | null;
+  display_name: string | null;
+  email: string | null;
+  source: string;
+  skills: string[];
+  cv_text: string | null;
+  git_log_text: string | null;
+  slack_text: string | null;
+  timezone: string | null;
+  availability_hours: number | null;
+  experience_years: number | null;
+  provenance: 'llm' | 'heuristic' | null;
+}
+
+export interface IngestionSummary {
+  extracted: number;
+  enriched: number;
+  skipped: number;
+  created: number;
+  provenance: IngestionProvenance;
+  errors: string[];
+  drafts: IngestionDraft[];
+}
+
+export interface GitlabIngestionRequest {
+  username: string;
+  project?: string | null;
+  base_url?: string | null;
+  token?: string | null;
+  mode: 'preview' | 'commit';
+}
+
+export interface JiraIngestionRequest {
+  base_url?: string | null;
+  email?: string | null;
+  token?: string | null;
+  project_key?: string | null;
+  usernames?: string[] | null;
+  mode: 'preview' | 'commit';
+}
+
+// ─── Ingestion API functions ───────────────────────────────────────────────────
+
+/** GET /ingestion/connectors — list available source connectors (manager only). */
+export async function listIngestionConnectors(): Promise<ConnectorInfo[]> {
+  return request<ConnectorInfo[]>('/ingestion/connectors');
+}
+
+/**
+ * POST /ingestion/file — multipart upload for file-kind connectors.
+ * Uses a dedicated fetch call so the browser can set multipart/form-data
+ * Content-Type with the correct boundary (not overridden by the JSON client).
+ *
+ * Added via in-place merge; existing client functions are not altered (AC26).
+ */
+export async function uploadFile(
+  file: File,
+  source: 'cv' | 'hr' | 'slack',
+  mode: 'preview' | 'commit',
+): Promise<IngestionSummary> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('source', source);
+  formData.append('mode', mode);
+
+  // Do NOT set Content-Type — the browser sets it with the multipart boundary.
+  const headers: Record<string, string> = {};
+  if (_accessToken) {
+    headers['Authorization'] = `Bearer ${_accessToken}`;
+  }
+
+  const response = await fetch(`${API_BASE_URL}/ingestion/file`, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: formData,
+  });
+
+  if (!response.ok) {
+    let errorBody: ApiError;
+    try {
+      errorBody = (await response.json()) as ApiError;
+    } catch {
+      errorBody = {
+        error_code: 'UNKNOWN_ERROR',
+        message: `HTTP ${response.status} ${response.statusText}`,
+        request_id: '',
+      };
+    }
+    throw new ApiClientError(response.status, errorBody);
+  }
+
+  return response.json() as Promise<IngestionSummary>;
+}
+
+/** POST /ingestion/gitlab — ingest from GitLab activity (manager only). */
+export async function ingestGitlab(payload: GitlabIngestionRequest): Promise<IngestionSummary> {
+  return request<IngestionSummary>('/ingestion/gitlab', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** POST /ingestion/jira — ingest from Jira activity (manager only, credential-gated). */
+export async function ingestJira(payload: JiraIngestionRequest): Promise<IngestionSummary> {
+  return request<IngestionSummary>('/ingestion/jira', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}

@@ -46,6 +46,7 @@ from src.engine.matching import (
     compute_growth_score,
     compute_match_score,
 )
+from src.core.helpers import create_developer_profile, _enqueue_embeddings
 
 router = APIRouter(prefix="/developers", tags=["developers"])
 
@@ -159,64 +160,6 @@ def _profile_to_response(dev: DeveloperProfile) -> DeveloperProfileResponse:
     )
 
 
-async def _enqueue_embeddings(dev_id: uuid.UUID, dev_data: dict) -> None:
-    """Generate embeddings and persist them; update embedding_status on the profile."""
-    from src.db.models import DeveloperEmbedding
-    from src.db.session import AsyncSessionLocal
-    from src.engine.embeddings import generate_developer_embeddings
-
-    try:
-        vecs = generate_developer_embeddings(
-            developer_id=str(dev_id),
-            skills=dev_data["skills"],
-            preferred_stack=dev_data["preferred_stack"],
-            experience_years=dev_data["experience_years"],
-            project_history=dev_data["project_history"],
-            work_style_vector=dev_data["work_style_vector"],
-            motivation_vector=dev_data["motivation_vector"],
-            career_goals=dev_data["career_goals"],
-        )
-    except Exception:
-        vecs = None
-
-    async with AsyncSessionLocal() as session:
-        try:
-            profile = await session.get(DeveloperProfile, dev_id)
-            if profile is None:
-                return
-
-            if vecs:
-                for emb_type, vector in vecs.items():
-                    if not vector:
-                        continue
-                    existing = await session.execute(
-                        select(DeveloperEmbedding).where(
-                            DeveloperEmbedding.developer_id == dev_id,
-                            DeveloperEmbedding.embedding_type == emb_type,
-                        )
-                    )
-                    row = existing.scalar_one_or_none()
-                    if row:
-                        row.vector = vector
-                        row.updated_at = datetime.now(timezone.utc)
-                    else:
-                        session.add(
-                            DeveloperEmbedding(
-                                developer_id=dev_id,
-                                embedding_type=emb_type,
-                                vector=vector,
-                                model_name="auto",
-                                model_version="1",
-                            )
-                        )
-                profile.embedding_status = "ready"
-            else:
-                profile.embedding_status = "failed"
-
-            await session.commit()
-        except Exception:
-            await session.rollback()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Routes
@@ -235,33 +178,23 @@ async def create_developer(
     if existing:
         raise HTTPException(status_code=409, detail=f"Developer {dev_id} already exists")
 
-    dev = DeveloperProfile(
-        id=dev_id,
+    # Use the shared create-plus-embed helper (AC16, AC23).
+    # POST /api/v1/developers and commit-mode ingestion share this single code path.
+    dev = await create_developer_profile(
+        db,
+        background_tasks,
+        dev_id=payload.id,
         skills=payload.skills,
         experience_years=payload.experience_years,
         preferred_stack=payload.preferred_stack,
-        work_style_vector=payload.work_style,
+        work_style=payload.work_style,
         motivation_vector=payload.motivation_vector,
-        timezone=payload.timezone,
+        timezone_str=payload.timezone,
         availability_hours=payload.availability_hours,
         career_goals=payload.career_goals,
         project_history=[h.model_dump() for h in payload.project_history],
-        is_behavioral_self_reported=payload.is_self_reported,
-        embedding_status="pending",
+        is_self_reported=payload.is_self_reported,
     )
-    db.add(dev)
-    await db.flush()
-
-    dev_data = {
-        "skills": dev.skills or [],
-        "preferred_stack": dev.preferred_stack or [],
-        "experience_years": dev.experience_years,
-        "project_history": dev.project_history or [],
-        "work_style_vector": dev.work_style_vector or [],
-        "motivation_vector": dev.motivation_vector or [],
-        "career_goals": dev.career_goals or [],
-    }
-    background_tasks.add_task(_enqueue_embeddings, dev.id, dev_data)
     return _profile_to_response(dev)
 
 
