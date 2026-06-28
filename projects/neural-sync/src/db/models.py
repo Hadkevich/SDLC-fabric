@@ -56,7 +56,7 @@ class Base(DeclarativeBase):
 class UserAccount(Base):
     __tablename__ = "user_accounts"
     __table_args__ = (
-        CheckConstraint("role IN ('developer', 'manager')", name="chk_user_role"),
+        CheckConstraint("role IN ('developer', 'manager', 'admin')", name="chk_user_role"),
         Index("idx_user_accounts_email", "email", unique=True),
         Index("idx_user_accounts_username", "username", unique=True),
         Index("idx_user_accounts_developer_profile_id", "developer_profile_id", unique=True),
@@ -130,6 +130,17 @@ class DeveloperProfile(Base):
     )
     embedding_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending"
+    )
+    # Manager-facing label (not personal identity — behavioral data stays anonymized).
+    display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Denormalized risk cache (migration 003 / WS-B2): populated by POST /risk/refresh so
+    # the roster can filter and aggregate risk at 10k scale without an O(N) recompute.
+    burnout_risk_badge: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    bench_risk_badge: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    burnout_risk_score: Mapped[float | None] = mapped_column(Double, nullable=True)
+    bench_risk_score: Mapped[float | None] = mapped_column(Double, nullable=True)
+    risk_computed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now
