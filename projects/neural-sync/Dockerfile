@@ -31,10 +31,10 @@ RUN apt-get update && apt-get install -y nginx && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend source code
+# Copy backend source code (Alembic migrations live under src/db/migrations per
+# alembic.ini script_location — there is no top-level alembic/ dir).
 COPY src ./src
 COPY alembic.ini .
-COPY alembic ./alembic
 
 # Copy built frontend from Stage 1
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist

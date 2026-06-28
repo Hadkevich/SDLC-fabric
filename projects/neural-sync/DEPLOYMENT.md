@@ -48,5 +48,7 @@ The startup guard refuses to boot in `DEBUG=false` with the default JWT secret o
 - The ingestion feature's pipeline deploy + Playwright e2e were **sandbox-limited in CI** (Docker
   build blocked, browser MCP not granted) — re-verify in a Docker+Playwright environment. See
   [`../../EVALUATION.md`](../../EVALUATION.md).
-- The multi-stage `Dockerfile` (devops-agent output) is **not yet built/verified**; build it in a
-  Docker-capable env before relying on it for production.
+- The multi-stage `Dockerfile` (devops-agent output) **now builds** (`docker build` → 538 MB
+  image, verified). It originally referenced a non-existent top-level `alembic/` dir — fixed, since
+  migrations live under `src/db/migrations` (per `alembic.ini`). The runtime (nginx + migrations +
+  uvicorn) has not been smoke-run end-to-end yet; do a `docker run` health-check before production.

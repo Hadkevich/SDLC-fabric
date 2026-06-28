@@ -92,5 +92,6 @@ allowed for manager+admin.)
 2. **pgvector, not Pinecone/Weaviate** — atomic GDPR erasure beats a second store (ADR-001).
 3. **Connectors**: GitLab is live; Slack/Jira/HR via file-import + credential-gated adapters
    (full live OAuth integrations remain a roadmap item).
-4. **Deploy/e2e** of the ingestion feature were sandbox-limited in CI; re-verify in a
-   Docker+Playwright environment (see `../../EVALUATION.md`).
+4. **Deploy/e2e**: the multi-stage `Dockerfile` now **builds** (verified; the bogus `COPY alembic`
+   was fixed). The Playwright e2e still needs a browser-MCP environment to run live (see
+   `../../EVALUATION.md`).
