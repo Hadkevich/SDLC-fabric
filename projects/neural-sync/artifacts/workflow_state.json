@@ -1,7 +1,7 @@
 {
   "spec_version": "v1",
   "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
-  "current_stage": "deployment",
+  "current_stage": "complete",
   "stages": {
     "requirement_ingestion": {
       "status": "success",
@@ -80,15 +80,25 @@
       ]
     },
     "deployment": {
-      "status": "awaiting_approval",
+      "status": "success",
       "attempt": 0,
       "agent": "devops-agent",
-      "started_at": "2026-06-27T13:23:59Z",
-      "completed_at": "2026-06-27T13:24:01Z",
+      "started_at": "2026-06-28T03:49:51Z",
+      "completed_at": "2026-06-28T03:54:35Z",
       "artifact_refs": [
-        "artifacts/release_report.json"
+        "artifacts/release_report_ingestion.json"
       ],
       "blocking_issues": []
+    },
+    "e2e_validation": {
+      "status": "success",
+      "attempt": 0,
+      "agent": "e2e-agent",
+      "started_at": "2026-06-28T03:54:35Z",
+      "completed_at": "2026-06-28T04:00:22Z",
+      "artifact_refs": [
+        "artifacts/e2e_report.json"
+      ]
     }
   },
   "tasks": {
@@ -376,7 +386,7 @@
       ]
     },
     "T-15-DEPLOY-INGESTION": {
-      "status": "awaiting_approval",
+      "status": "success",
       "attempt": 0,
       "rework": 0,
       "owner_agent": "devops-agent",
@@ -384,23 +394,33 @@
       "depends_on": [
         "T-13-REVIEW-INGESTION",
         "T-14-QA-INGESTION"
+      ],
+      "started_at": "2026-06-28T03:49:51Z",
+      "completed_at": "2026-06-28T03:54:35Z",
+      "artifact_refs": [
+        "artifacts/release_report_ingestion.json"
       ]
     },
     "T-16-E2E": {
-      "status": "pending",
+      "status": "success",
       "attempt": 0,
       "rework": 0,
       "owner_agent": "e2e-agent",
       "stage": "e2e_validation",
       "depends_on": [
         "T-15-DEPLOY-INGESTION"
+      ],
+      "started_at": "2026-06-28T03:54:35Z",
+      "completed_at": "2026-06-28T04:00:22Z",
+      "artifact_refs": [
+        "artifacts/e2e_report.json"
       ]
     }
   },
   "halted": false,
   "max_retries": 3,
   "created_at": "2026-06-26T18:12:19Z",
-  "updated_at": "2026-06-28T03:42:21Z",
+  "updated_at": "2026-06-28T04:00:22Z",
   "max_feedback_cycles": 0,
   "feedback_cycle": 0,
   "health_rework": 0,
