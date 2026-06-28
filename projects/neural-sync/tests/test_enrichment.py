@@ -9,6 +9,20 @@ import pytest
 
 from src.services.enrichment import enrich_profile, EnrichmentResult
 
+
+@pytest.fixture(autouse=True)
+def _force_heuristic_path(monkeypatch):
+    """Pin the no-key precondition the whole file documents.
+
+    These tests assert the deterministic heuristic path. The runtime container may
+    carry a live GEMINI_API_KEY, which would route ``enrich_profile`` through Gemini
+    and make the assertions depend on live model output / quota (order-dependent
+    flakiness). Forcing the key empty keeps every test here deterministic.
+    """
+    from src.core.settings import settings
+    monkeypatch.setattr(settings, "gemini_api_key", "", raising=False)
+
+
 SAMPLE_CV = """
 Senior backend engineer with 7 years experience. Built async Python (FastAPI) +
 PostgreSQL services and led a cross-functional team, mentored juniors, and shipped at a

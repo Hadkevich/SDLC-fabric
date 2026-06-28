@@ -19,7 +19,7 @@ and least-privilege + model-diverse by role. It matches the brief's *"determinis
 creativity, orchestration > model intelligence"* constraint.
 
 The recorded end-to-end demo (`neural-sync`) produced **all** artifacts, a **green QA
-suite (108/108 today; 77/77 at the original recorded run)**, and reaches
+suite (243/243 today; 77/77 at the original recorded run)**, and reaches
 `current_stage: "complete"` with every stage gate
 satisfied (`workflow_state.json`). Along the way the **review gate caught a real
 contract defect (BLK-001)** — the deploy gate correctly refused to ship while the
@@ -55,8 +55,9 @@ Every required artifact is present and schema-valid in
 advanced on free-form prose.
 
 ### 2.3 QA was green and traceable
-`test_plan.json` → `summary: { total: 108, passed: 108, failed: 0, skipped: 0 }`
-(108 today; 77 at the original recorded run), with
+`test_plan.json` enumerates the QA agent's **77-case recorded plan** (`summary:
+{ total: 77, passed: 77, failed: 0 }`); the **live implementation suite has since grown
+to 243/243 passing** (`docker exec neural-sync-backend-1 pytest`), with
 **all 13 acceptance criteria (AC1–AC13) covered by ≥1 test**, including the two
 signature cases from the idea brief: good-match score ≥ 0.75 (TC-001) and the skill-only
 **trap** bad-match score ≤ 0.45 (TC-002). The behavioral layer demonstrably changes the
@@ -139,7 +140,7 @@ event rather than a terminal one:
 | Criterion | Verdict | Basis |
 |-----------|:------:|-------|
 | ≥80% of runs without human intervention | ✅ | Run reaches `complete`; human input only at the **3 designed checkpoints** (requirements, architecture, `production_deploy` — `HUMAN_GATES`). Engine also supports fully unattended `--yes` runs |
-| Artifacts consistent (QA tests pass) | ✅ | 108/108 pass (77 at the recorded run), all AC covered; all artifacts schema-valid |
+| Artifacts consistent (QA tests pass) | ✅ | 243/243 pass (77 at the recorded run), all AC covered; all artifacts schema-valid |
 | Recover from ≥2 simulated failures | ✅ | Transient timeouts recovered twice (§3.2); the review gate caught BLK-001 and the run closed it and re-deployed (§3.1/§3.3) |
 | Re-run with modified requirements | ✅ | `workflow_id`-keyed runs; product update mode; `--replay` re-validation |
 
@@ -199,7 +200,7 @@ After the run above, a Task-04 re-audit found real gaps; a compliance pass close
 both the demo app **and** the factory. Full file-level status:
 `projects/neural-sync/docs/TASK04-COMPLIANCE.md`.
 
-**What was added (test suite 108 → 243 green):**
+**What was added (test suite 77 → 243 green):**
 - **pgvector ANN made load-bearing** — previously decorative (no ANN query existed). Now
   `engine/retrieval.py` powers `POST /developers/{id}/recommendations` + `/similar`; the
   deterministic scorer is untouched, so the matching ACs still hold. Verified live against pgvector.

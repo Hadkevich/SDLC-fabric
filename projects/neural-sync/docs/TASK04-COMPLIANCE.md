@@ -4,7 +4,7 @@ Honest, file-level mapping of each Task04 requirement to its implementation stat
 compliance pass. Status: ✅ done · 🟡 partial / pragmatic · ⚠️ deliberate deviation (documented)
 · ❌ not done.
 
-> Verification baseline: `docker exec neural-sync-backend-1 pytest` → **243 passing**; pgvector
+> Verification baseline: `docker exec neural-sync-backend-1 pytest` → **243/243 passing, 0 failed**; pgvector
 > ANN verified live; risk-refresh / admin overrides / ingestion verified live against the running
 > container.
 

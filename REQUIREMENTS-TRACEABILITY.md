@@ -71,7 +71,7 @@ The demo project is **`projects/neural-sync/`** — the Task-04 NEURAL SYNC app
 | 3.2 | Requirements generated internally | ✅ | `projects/neural-sync/artifacts/requirements.json` + `.md` (product-agent) |
 | 3.3 | Architecture defined by agent | ✅ | `artifacts/architecture.json`, `api-contracts.json`, `data-model.json`, `adr/adr-001..004.json` (architect-agent) |
 | 3.4 | Code generated | ✅ | `projects/neural-sync/src/**` + `frontend/src/**`; `artifacts/code_spec.json` |
-| 3.5 | Tests created & executed | ✅ | `artifacts/test_plan.json` — **108/108 pass, 0 failed** (77 at the original recorded run), all 13 acceptance criteria covered |
+| 3.5 | Tests created & executed | ✅ | `artifacts/test_plan.json` — **243/243 pass, 0 failed** (77 at the original recorded run), all 13 acceptance criteria covered (`docker exec neural-sync-backend-1 pytest`) |
 | 3.6 | Deployment automated (local or cloud) | ✅ | DevOps path builds the Dockerfile, runs a hardened local container, and health-checks it → `release_report.json` verdict `success` (`environment: local`, live URL, HTTP health check `pass`, image retained as rollback handle). Gate passed: review `approved_with_comments` + tests `failed == 0` |
 | 3.7 | Deployed app validated in a real browser *(extra, beyond brief)* | ✅ | `e2e_validation` stage (`e2e-agent` + Playwright MCP) **exercised end-to-end** on the live app (`http://localhost:5173`): all **8/8 AC26 ingestion scenarios passed** in a real browser (manager login → Ingestion tab → ConnectorPicker ≥5 → dropzone → GitLab/Jira forms → preview/commit → role-gating negative test), **9 real screenshots** in `artifacts/e2e-screens/`, `e2e_report.json` verdict `passed_with_warnings`, pipeline → `complete` (`SPEC.md §3.8`; schema `schemas/e2e_report.schema.json`). Enabled by the runner fix that grants the agent's `mcp__playwright__*` tools + loads `.mcp.json` for sub-projects (`runners.py`) |
 
@@ -80,7 +80,7 @@ The demo project is **`projects/neural-sync/`** — the Task-04 NEURAL SYNC app
 | # | Criterion | Status | Evidence |
 |---|-----------|:------:|----------|
 | 4.1 | ≥80% of runs without human intervention | ✅ | The workflow reaches `complete`; agents run every stage's content. Human input was limited to the **3 designed checkpoints** (requirements, architecture, `production_deploy` — `HUMAN_GATES`) plus fixing the review-caught BLK-001 and re-running the deploy stage — well within the ≥80%-autonomous bar. Engine also supports fully unattended `--yes` runs |
-| 4.2 | Artifacts consistent (QA-generated tests pass) | ✅ | `test_plan.json` 108/108 pass (77 at the recorded run); every required artifact present and schema-valid in `projects/neural-sync/artifacts/` |
+| 4.2 | Artifacts consistent (QA-generated tests pass) | ✅ | `test_plan.json` 243/243 pass (77 at the recorded run); every required artifact present and schema-valid in `projects/neural-sync/artifacts/` |
 | 4.3 | Recover from ≥2 simulated failures | ✅ | Two classes recovered: (a) transient timeouts — developer + QA agents timed out at 1800 s and recovered on re-dispatch (`events.log.jsonl`); (b) quality rejection — the review gate caught BLK-001, it was fixed, and the deploy re-run passed (§3 / `EVALUATION.md`). The autonomous fix loop is wired (`_request_rework`/`_drain_rework`, per-stage `STAGE_REWORK_CAP`) |
 | 4.4 | Re-run with modified requirements | ✅ | Each run is keyed by `workflow_id`; product-agent supports update mode; `--replay` re-validates prior outputs (`runners.py` `ReplayRunner`) |
 
@@ -158,7 +158,7 @@ Evidence paths are under `projects/neural-sync/`.
 - **Control plane (Phase 1 + 2):** strong and complete — deterministic engine,
   schema-gated handoffs, event-sourced state, least-privilege model-diverse fleet,
   bounded retry + rework + escalation. This is the core of the submission.
-- **Demo (Phase 3):** the NEURAL SYNC app is real and substantial, QA is green (108/108;
+- **Demo (Phase 3):** the NEURAL SYNC app is real and substantial, QA is green (243/243;
   77 at the recorded run), and the **recorded run completes end-to-end** to
   `current_stage: "complete"`. The review
   gate caught a legitimate contract violation (BLK-001); it was fixed, the reviewer
