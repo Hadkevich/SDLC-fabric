@@ -6,6 +6,7 @@
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
 python-multipart==0.0.9          # Form / file upload support
+apscheduler==3.10.4              # Optional continuous re-optimization loop (NEURAL_SYNC_REOPT_INTERVAL)
 
 # ── Database (async) ─────────────────────────────────────────────────────────
 sqlalchemy==2.0.30

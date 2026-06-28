@@ -613,13 +613,14 @@ async def rescore_matches(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> AsyncJobResponse:
-    if current_user.role != "manager":
-        raise HTTPException(status_code=403, detail="Manager role required")
+    if current_user.role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
 
-    job_id = uuid.uuid4()
-    # In production: enqueue actual re-scoring job
+    from src.services.reoptimization import rescore_all_matches
+
+    n = await rescore_all_matches(db)
     return AsyncJobResponse(
-        job_id=job_id,
-        message="Re-score job accepted and queued",
-        estimated_count=None,
+        job_id=uuid.uuid4(),
+        message=f"Re-scored {n} match record(s) against current weights",
+        estimated_count=n,
     )

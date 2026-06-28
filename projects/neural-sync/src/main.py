@@ -92,7 +92,15 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """
     assert_secret_configured(settings)
     assert_embedding_dim_consistent(settings)
-    yield
+    # Optional continuous re-optimization loop (Task04 §4); no-op unless
+    # NEURAL_SYNC_REOPT_INTERVAL>0. Imported here so tests that never enter the
+    # lifespan don't require apscheduler.
+    from src.services.scheduler import start_scheduler, shutdown_scheduler
+    start_scheduler()
+    try:
+        yield
+    finally:
+        shutdown_scheduler()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

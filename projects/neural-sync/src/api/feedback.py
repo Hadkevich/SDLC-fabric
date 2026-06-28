@@ -199,14 +199,16 @@ async def trigger_reembed(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> AsyncJobResponse:
-    if current_user.role != "manager":
-        raise HTTPException(status_code=403, detail="Manager role required")
+    if current_user.role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
 
-    job_id = uuid.uuid4()
+    from src.services.reoptimization import reembed_all_developers
+
+    n = await reembed_all_developers(db)
     return AsyncJobResponse(
-        job_id=job_id,
-        message="Re-embedding job accepted and queued for all profiles",
-        estimated_count=None,
+        job_id=uuid.uuid4(),
+        message=f"Re-embedded {n} developer profile(s)",
+        estimated_count=n,
     )
 
 
@@ -219,13 +221,16 @@ async def refresh_risk_scores(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> AsyncJobResponse:
-    if current_user.role != "manager":
-        raise HTTPException(status_code=403, detail="Manager role required")
+    if current_user.role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
 
-    job_id = uuid.uuid4()
+    from src.services.reoptimization import refresh_all_risk_scores
+
+    n = await refresh_all_risk_scores(db)
     return AsyncJobResponse(
-        job_id=job_id,
-        message="Risk score refresh job accepted for all developers",
+        job_id=uuid.uuid4(),
+        message=f"Refreshed cached risk scores for {n} developer(s)",
+        estimated_count=n,
     )
 
 
