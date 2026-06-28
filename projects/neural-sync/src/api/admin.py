@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.auth import TokenPayload, require_admin_or_manager
+from src.core.auth import TokenPayload, require_admin
 from src.db.models import AllocationRecord, DeveloperProfile, ProjectProfile
 from src.db.session import get_db
 
@@ -71,7 +71,7 @@ def _to_resp(a: AllocationRecord) -> AllocationResponse:
 async def create_allocation(
     payload: AllocationCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: TokenPayload = Depends(require_admin_or_manager),
+    current_user: TokenPayload = Depends(require_admin),
 ) -> AllocationResponse:
     """Assign a developer to a project (or record a bench period with project_id=null)."""
     if payload.end_date < payload.start_date:
@@ -99,7 +99,7 @@ async def update_allocation(
     allocation_id: uuid.UUID,
     payload: AllocationUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: TokenPayload = Depends(require_admin_or_manager),
+    current_user: TokenPayload = Depends(require_admin),
 ) -> AllocationResponse:
     """Override an existing allocation (move project, change dates/intensity, bench/un-bench)."""
     alloc = await db.get(AllocationRecord, allocation_id)
@@ -131,7 +131,7 @@ async def update_allocation(
 async def delete_allocation(
     allocation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: TokenPayload = Depends(require_admin_or_manager),
+    current_user: TokenPayload = Depends(require_admin),
 ) -> None:
     alloc = await db.get(AllocationRecord, allocation_id)
     if alloc is None:
@@ -143,7 +143,7 @@ async def delete_allocation(
 async def list_developer_allocations(
     developer_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: TokenPayload = Depends(require_admin_or_manager),
+    current_user: TokenPayload = Depends(require_admin),
 ) -> list[AllocationResponse]:
     rows = (
         await db.execute(

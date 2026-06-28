@@ -45,7 +45,7 @@ async def test_get_weights_returns_defaults():
         yield session
 
     def override_user():
-        return TokenPayload(sub=MGR_USER_ID, role="manager")
+        return TokenPayload(sub=MGR_USER_ID, role="admin")  # weight tuning = Admin View (§6)
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
@@ -102,7 +102,7 @@ async def test_update_weights_valid_returns_200_and_applies_change():
         yield session
 
     def override_user():
-        return TokenPayload(sub=MGR_USER_ID, role="manager")
+        return TokenPayload(sub=MGR_USER_ID, role="admin")  # weight tuning = Admin View (§6)
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
@@ -220,7 +220,7 @@ async def test_update_weights_invalid_sum_returns_422():
         yield session
 
     def override_user():
-        return TokenPayload(sub=MGR_USER_ID, role="manager")
+        return TokenPayload(sub=MGR_USER_ID, role="admin")  # weight tuning = Admin View (§6)
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
@@ -268,7 +268,7 @@ async def test_update_weights_negative_weight_returns_422():
         yield session
 
     def override_user():
-        return TokenPayload(sub=MGR_USER_ID, role="manager")
+        return TokenPayload(sub=MGR_USER_ID, role="admin")  # weight tuning = Admin View (§6)
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
@@ -361,7 +361,7 @@ async def test_update_weights_exceeds_max_returns_422():
         yield session
 
     def override_user():
-        return TokenPayload(sub=MGR_USER_ID, role="manager")
+        return TokenPayload(sub=MGR_USER_ID, role="admin")  # weight tuning = Admin View (§6)
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user

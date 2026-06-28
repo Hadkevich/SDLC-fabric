@@ -40,7 +40,7 @@ from src.connectors import (
     JiraConnector,
     SlackConnector,
 )
-from src.core.auth import TokenPayload, require_manager
+from src.core.auth import TokenPayload, require_admin_or_manager
 from src.core.settings import settings
 from src.db.session import get_db
 from src.etl.orchestrator import IngestionSummary, run_ingestion
@@ -138,7 +138,7 @@ def _build_connector_info_list() -> list[dict]:
 
 @router.get("/connectors", response_model=list[ConnectorInfo])
 async def list_ingestion_connectors(
-    _manager: TokenPayload = Depends(require_manager),
+    _user: TokenPayload = Depends(require_admin_or_manager),
 ) -> list[dict]:
     """List available ingestion connector descriptors [AC14].
 
@@ -160,7 +160,7 @@ async def ingest_file(
     source: str = Form(..., description="File-kind connector: cv, hr, or slack."),
     mode: str = Form("preview", description="preview or commit."),
     db: AsyncSession = Depends(get_db),
-    _manager: TokenPayload = Depends(require_manager),
+    _user: TokenPayload = Depends(require_admin_or_manager),
 ) -> IngestionSummary:
     """Ingest developer profiles from a multipart file upload [AC22].
 
@@ -244,7 +244,7 @@ async def ingest_gitlab(
     request: GitlabIngestionRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _manager: TokenPayload = Depends(require_manager),
+    _user: TokenPayload = Depends(require_admin_or_manager),
 ) -> IngestionSummary:
     """Ingest a developer profile from GitLab activity [AC19].
 
@@ -278,7 +278,7 @@ async def ingest_jira(
     request: JiraIngestionRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _manager: TokenPayload = Depends(require_manager),
+    _user: TokenPayload = Depends(require_admin_or_manager),
 ) -> IngestionSummary:
     """Ingest developer profiles from Jira issue activity [AC20].
 

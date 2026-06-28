@@ -613,8 +613,8 @@ async def rescore_matches(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> AsyncJobResponse:
-    if current_user.role not in ("manager", "admin"):
-        raise HTTPException(status_code=403, detail="Manager or admin role required")
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required (system re-score)")
 
     from src.services.reoptimization import rescore_all_matches
 

@@ -93,7 +93,7 @@ async def create_project(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> ProjectProfileResponse:
-    if current_user.role != "manager":
+    if current_user.role not in ("manager", "admin"):
         raise HTTPException(status_code=403, detail="Manager role required to create projects")
 
     proj_id = payload.id or uuid.uuid4()
@@ -139,7 +139,7 @@ async def update_project(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> ProjectProfileResponse:
-    if current_user.role != "manager":
+    if current_user.role not in ("manager", "admin"):
         raise HTTPException(status_code=403, detail="Manager role required")
 
     proj = await db.get(ProjectProfile, project_id)
@@ -167,7 +167,7 @@ async def delete_project(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> None:
-    if current_user.role != "manager":
+    if current_user.role not in ("manager", "admin"):
         raise HTTPException(status_code=403, detail="Manager role required")
 
     proj = await db.get(ProjectProfile, project_id)

@@ -165,8 +165,8 @@ async def get_erasure_audit(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> ErasureAuditRecord:
-    if current_user.role != "manager":
-        raise HTTPException(status_code=403, detail="Manager role required")
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
 
     result = await db.execute(
         select(ErasureAuditLog)
@@ -199,8 +199,8 @@ async def trigger_reembed(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> AsyncJobResponse:
-    if current_user.role not in ("manager", "admin"):
-        raise HTTPException(status_code=403, detail="Manager or admin role required")
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required (system re-embedding)")
 
     from src.services.reoptimization import reembed_all_developers
 
@@ -221,8 +221,8 @@ async def refresh_risk_scores(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> AsyncJobResponse:
-    if current_user.role not in ("manager", "admin"):
-        raise HTTPException(status_code=403, detail="Manager or admin role required")
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required (system risk refresh)")
 
     from src.services.reoptimization import refresh_all_risk_scores
 
@@ -274,8 +274,8 @@ async def get_team_risk_summary(
     returned (scoping by team_id is deferred to Phase 2). Raw behavioral vectors
     are never included in the response.
     """
-    if current_user.role != "manager":
-        raise HTTPException(status_code=403, detail="Manager role required")
+    if current_user.role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
 
     # Load all developer profiles with their allocation records in one query
     result = await db.execute(

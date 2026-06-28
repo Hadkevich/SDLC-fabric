@@ -280,9 +280,11 @@ export default function App() {
           >
             Roster
           </button>
-          <button onClick={() => setManagerTab('weights')} style={tabBtnStyle(managerTab === 'weights')}>
-            Weight Config
-          </button>
+          {session.role === 'admin' && (
+            <button onClick={() => setManagerTab('weights')} style={tabBtnStyle(managerTab === 'weights')}>
+              Weight Config
+            </button>
+          )}
           <button
             data-testid="ingestion-tab-button"
             onClick={() => setManagerTab('ingestion')}
@@ -316,7 +318,7 @@ export default function App() {
 
       {managerTab === 'risk' && <ManagerDashboard teamId={teamId} />}
       {managerTab === 'roster' && <RosterPage />}
-      {managerTab === 'weights' && <WeightConfigPage />}
+      {managerTab === 'weights' && session.role === 'admin' && <WeightConfigPage />}
       {managerTab === 'ingestion' && <IngestionPage />}
       {managerTab === 'profile' && <ProfilePage role="manager" userId={session.user_id} />}
     </div>

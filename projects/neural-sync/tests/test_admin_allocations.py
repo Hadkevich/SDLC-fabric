@@ -66,12 +66,14 @@ async def test_admin_creates_allocation():
     assert sum(isinstance(o, AllocationRecord) for o in session.added) == 1
 
 
-async def test_manager_may_also_create_allocation():
+async def test_manager_forbidden_from_system_override():
+    """Allocation override is a SYSTEM OVERRIDE = Admin View (Task04 §6): manager → 403.
+    Managers get allocation *suggestions* (reallocation-suggestion), not overrides."""
     session = MockAsyncSession()
     session.set_get("DeveloperProfile", DEV_ID, MockDeveloperProfile(dev_id=DEV_ID))
     session.set_get("ProjectProfile", PROJ_ID, MockProjectProfile(proj_id=PROJ_ID))
     resp = await _post(session, "/api/v1/admin/allocations", _alloc_body(), role="manager")
-    assert resp.status_code == 201, resp.text
+    assert resp.status_code == 403
 
 
 async def test_developer_forbidden():

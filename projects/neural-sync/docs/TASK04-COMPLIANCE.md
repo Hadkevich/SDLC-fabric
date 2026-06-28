@@ -51,13 +51,20 @@ compliance pass. Status: ✅ done · 🟡 partial / pragmatic · ⚠️ delibera
   (ADR-001). Now genuinely **load-bearing**: `engine/retrieval.py` ANN (`<=>`) on the critical
   path for recommendations + similar-developer search.
 
-## §6 Frontend (3 roles)
-- **Developer** ✅ (recommendations, explanations, growth, accept/reject).
-- **Manager** ✅ (team risk + Team-Fit, reallocation modal, **Roster** with pagination/search/
-  risk-filter for 10k, weights, ingestion).
-- **Admin** ✅ — real `admin` role (migration 003) + system-override endpoints (`api/admin.py`
-  allocation CRUD) + weight tuning; admin uses the manager view (Risk·Roster·Weights·Ingestion)
-  with an 🛡 Admin chip.
+## §6 Frontend (3 roles) — gated to match the spec's view split exactly
+
+| View | Role | Capabilities (and the gate) |
+|---|---|---|
+| **Developer View** | `developer` | Recommended projects, match explanations, growth paths, accept/reject — own data only |
+| **Manager View** | `manager` (+admin) | Team composition health + risk alerts (`/teams/{id}/risk-summary`, Team-Fit), allocation **suggestions** (`/reallocation-suggestion`), Roster (paginated/filterable for 10k), team analytics, projects catalog |
+| **Admin View** | `admin` only | **Weight tuning** (`PUT /config/weights`), **system overrides** (`/admin/allocations` CRUD), re-optimization triggers (`rescore`/`reembed`/`risk/refresh`), GDPR erasure-audit |
+
+`admin` is a **superset** of `manager` (also sees team health); the Admin-exclusive capabilities
+(weight tuning + system overrides) return **403 for managers** — exactly matching the spec, where
+weight tuning and system overrides are the *Admin* View, not the Manager View. Frontend: the Weight
+Config tab renders only for `admin`; the role chip shows 🛡 Admin vs ⚙ Manager. Gates:
+`require_admin` / `require_admin_or_manager` in `core/auth.py`. (Ingestion §5 is not a §6 view —
+allowed for manager+admin.)
 
 ## §7 Tech Stack
 - Backend FastAPI/Python ✅ · Frontend React/TS ✅ · AI ⚠️ Gemini (see §3) ·
