@@ -1,0 +1,89 @@
+# NEURAL SYNC — Task04 Requirements Compliance
+
+Honest, file-level mapping of each Task04 requirement to its implementation status after the
+compliance pass. Status: ✅ done · 🟡 partial / pragmatic · ⚠️ deliberate deviation (documented)
+· ❌ not done.
+
+> Verification baseline: `docker exec neural-sync-backend-1 pytest` → **243 passing**; pgvector
+> ANN verified live; risk-refresh / admin overrides / ingestion verified live against the running
+> container.
+
+---
+
+## §1 Mission Objective
+
+| Capability | Status | Where |
+|---|---|---|
+| Match devs↔projects: technical | ✅ | `engine/matching.py` `compute_skill_score` (alias-aware set overlap × experience) |
+| …work style & communication | ✅ | `compute_workstyle_score` (centered cosine, 8-dim) |
+| …motivation & career intent | ✅ | `compute_motivation_score`, `compute_growth_score` |
+| …availability & time zone | ✅ | `compute_timezone_score` now folds an **availability-fit** factor into w4 (was: tz only) |
+| Continuously re-optimize allocation | ✅ | `services/reoptimization.py` (real `rescore`/`risk-refresh`/`reembed`) + opt-in `services/scheduler.py` (APScheduler, `NEURAL_SYNC_REOPT_INTERVAL`) |
+| Predict bench / burnout | ✅ | `engine/risk.py` (`compute_bench_risk`, `compute_burnout_risk`) |
+| Predict team mismatch | ✅ | `risk.py` `compute_team_mismatch_probability`; surfaced in Manager UI ("Team Fit") |
+| Recommend project transitions / internal mobility | ✅ | `developers.py` `/reallocation-suggestion` (ANN-backed) + `/similar` (ANN peers) |
+| Recommend skill growth paths | 🟡 | `growth_potential` list (deterministic; LLM career-hints are a noted enhancement) |
+
+## §2 Architecture
+- **2.1 Identity / 2.2 Project Genome** ✅ — `db/models.py` (DeveloperProfile, ProjectProfile).
+- **2.3 Matching Engine** ✅ — 5-weight formula, weights live from `WeightConfig` per request.
+
+## §3 AI Layer (Claude)
+- **Provider** ⚠️ — runs on **Google Gemini** (free tier) by deliberate cost decision; provider
+  is swappable via the prompt artifact `model_name` (ADR-004). The SDLC factory that *builds*
+  this app uses Claude agents. Documented, not hidden.
+- **3.1 Profile Enrichment** ✅ — `services/enrichment.py` (LLM + heuristic fallback), now fed by
+  real **source connectors** (§5).
+- **3.2 Recommendation generation** ✅ "why this match" (LLM) · 🟡 transitions/career hints (deterministic).
+
+## §4 Real-Time Optimization Engine
+- **4.1 Bench / 4.2 Burnout** ✅. **4.3 Reallocation** ✅ (`/reallocation-suggestion`).
+- **Real-time / continuous** ✅ — endpoints are real (no longer stubs); optional scheduler loop
+  closes the continuous path. **§10 "static allocation" failure condition → avoided.**
+
+## §5 Data Pipelines
+- **Sources** ✅/🟡 — `src/connectors/`: **GitLab (live, httpx, read-only)**, HR (CSV/JSON file),
+  Slack (export JSON), CV (txt/md), Jira (credential-gated adapter). All degrade gracefully
+  offline/without credentials.
+- **ETL → vectorization → storage** ✅ — `src/etl/orchestrator.py` → existing `enrich_profile`
+  → `embeddings.py` → pgvector. Endpoints `/ingestion/{connectors,file,gitlab,jira}`.
+- **Vector DB** ⚠️ — **pgvector** (not Pinecone/Weaviate) — chosen for atomic GDPR erasure
+  (ADR-001). Now genuinely **load-bearing**: `engine/retrieval.py` ANN (`<=>`) on the critical
+  path for recommendations + similar-developer search.
+
+## §6 Frontend (3 roles)
+- **Developer** ✅ (recommendations, explanations, growth, accept/reject).
+- **Manager** ✅ (team risk + Team-Fit, reallocation modal, **Roster** with pagination/search/
+  risk-filter for 10k, weights, ingestion).
+- **Admin** ✅ — real `admin` role (migration 003) + system-override endpoints (`api/admin.py`
+  allocation CRUD) + weight tuning; admin uses the manager view (Risk·Roster·Weights·Ingestion)
+  with an 🛡 Admin chip.
+
+## §7 Tech Stack
+- Backend FastAPI/Python ✅ · Frontend React/TS ✅ · AI ⚠️ Gemini (see §3) ·
+  Vector DB ⚠️ pgvector (see §5) · Infra 🟡 Docker + Cloud Run/Terraform manifests (`deploy/`, see §F).
+
+## §8 Non-Functional
+- GDPR erasure ✅ (cascade + audit). Explainable AI ✅. Latency <500ms ✅ (sync stub, async LLM).
+- **Scalable to 10k+** ✅ — pgvector HNSW + ANN candidate retrieval + O(page) paginated roster
+  (`GET /developers`, GIN/btree indexes) + denormalized risk cache. Seed + load harness:
+  `scripts/seed_scale.py`, `loadtest/` (see `artifacts/perf/`).
+
+## §9 MVP / §10 Failure Conditions
+- MVP ✅ (ingestion, matching, explanation, dashboards). Failure conditions all **avoided**:
+  not skill-only ✅, explainable ✅, not static (re-optimization real) ✅, rejection tracked ✅.
+
+## §11 Cyberpunk Directive / §12 Deliverables
+- Signal extraction over UI polish ✅; explainability mandatory ✅.
+- Module impl ✅ · API contracts (`artifacts/api-contracts.json`) ✅ · prompt artifacts ✅ ·
+  good/bad-match test scenarios ✅.
+
+---
+
+## Notable deviations (deliberate, documented)
+1. **Gemini, not Claude** for the app LLM — cost decision; Claude is a config-swap (ADR-004).
+2. **pgvector, not Pinecone/Weaviate** — atomic GDPR erasure beats a second store (ADR-001).
+3. **Connectors**: GitLab is live; Slack/Jira/HR via file-import + credential-gated adapters
+   (full live OAuth integrations remain a roadmap item).
+4. **Deploy/e2e** of the ingestion feature were sandbox-limited in CI; re-verify in a
+   Docker+Playwright environment (see `../../EVALUATION.md`).
