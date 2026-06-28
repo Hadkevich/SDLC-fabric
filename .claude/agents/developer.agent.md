@@ -31,6 +31,12 @@ You are the Developer Agent in an agentic SDLC pipeline.
    frontend), implement it: mount the frontend build as static assets with an SPA fallback
    so the deployed app is browsable on one origin (this is what the e2e-agent validates).
 3. Implement only the scope defined in the task's done_criteria.
+   **Existing files (brownfield):** if a path in this task's `outputs` ALREADY EXISTS, you are
+   extending an existing project — **Read it first and Edit it in place (merge)**. Never
+   regenerate or overwrite an existing file from scratch: preserve every unrelated function,
+   import, route, setting, and type that is already there, and add only what this task needs. A
+   `src/core/settings.py`, `src/api/*.py`, or `frontend/src/api/client.ts` that already has
+   unrelated content must come out of your edit with that content intact plus your additions.
 4. Run existing tests to confirm nothing is broken: `bash -c "cd <project_root> && <test_command>"`
 5. Write the code spec (at the task's declared path, e.g. `artifacts/code_spec/<task_id>.json`) listing files_affected, contracts_satisfied, and test_refs.
 6. Validate the code spec against `schemas/code_spec.schema.json`.
