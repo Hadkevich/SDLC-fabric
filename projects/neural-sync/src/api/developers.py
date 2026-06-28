@@ -742,3 +742,213 @@ async def get_reallocation_suggestion(
             projected_burnout_after_move=projected_burnout,
         ),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /developers/{id}/recommendations  (WS-B4 — on-demand ANN-backed matching)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RecommendationRequest(BaseModel):
+    """Tuning knobs for on-demand recommendations (all optional)."""
+    top_k: int = Field(10, ge=1, le=50)
+    candidate_pool: int = Field(50, ge=1, le=200)
+    min_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+
+
+@router.post("/{developer_id}/recommendations")
+async def recommend_projects(
+    developer_id: uuid.UUID,
+    payload: Optional[RecommendationRequest] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
+    """Compute fresh recommendations on demand: pgvector ANN pre-selects candidate
+    projects, the deterministic 5-dimension engine scores them, and MatchRecords are
+    upserted (never deleted — that would cascade-drop feedback). Returns the ranked
+    top-K. Falls back to a bounded relational scan with vector_search_degraded=True
+    when ANN is unavailable.
+    """
+    from src.api.matches import _load_weights, _match_record_to_response, DeveloperMatchesResponse
+    from src.engine.retrieval import ann_candidate_projects, VectorSearchDegraded
+    from src.engine.matching import (
+        generate_stub_explanation, generate_risks, generate_growth_potential_list,
+    )
+
+    if current_user.role == "developer" and current_user.developer_profile_id != str(developer_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    dev = await db.get(DeveloperProfile, developer_id)
+    if dev is None:
+        raise HTTPException(status_code=404, detail=f"Developer {developer_id} not found")
+
+    req = payload or RecommendationRequest()
+    weights = await _load_weights(db)
+
+    degraded = False
+    try:
+        candidate_ids = await ann_candidate_projects(db, developer_id, top_n=req.candidate_pool)
+    except VectorSearchDegraded:
+        degraded = True
+        res = await db.execute(select(ProjectProfile.id).limit(req.candidate_pool))
+        candidate_ids = [r[0] for r in res.all()]
+
+    if not candidate_ids:
+        return DeveloperMatchesResponse(developer_id=developer_id, matches=[], total=0)
+
+    proj_rows = (
+        await db.execute(select(ProjectProfile).where(ProjectProfile.id.in_(candidate_ids)))
+    ).scalars().all()
+    existing_rows = (
+        await db.execute(
+            select(MatchRecord).where(
+                MatchRecord.developer_id == developer_id,
+                MatchRecord.project_id.in_(candidate_ids),
+            )
+        )
+    ).scalars().all()
+    existing_by_proj = {m.project_id: m for m in existing_rows}
+
+    weights_snapshot = {
+        "w1": weights.w1_skill, "w2": weights.w2_workstyle, "w3": weights.w3_motivation,
+        "w4": weights.w4_timezone, "w5": weights.w5_growth, "version": weights.version,
+    }
+    behavioral_unavailable = dev.embedding_status != "ready"
+    now = datetime.now(timezone.utc)
+    scored: list[tuple[MatchRecord, str]] = []
+
+    for proj in proj_rows:
+        skill = compute_skill_score(dev.skills or [], proj.required_skills or [], dev.experience_years)
+        ws = compute_workstyle_score(
+            dev.work_style_vector or [0.5] * 8, proj.team_structure or "",
+            proj.workload_intensity, proj.innovation_level,
+        )
+        mot = compute_motivation_score(
+            dev.motivation_vector or [0.5] * 8, proj.innovation_level,
+            proj.growth_opportunities or [], proj.workload_intensity,
+        )
+        tz = compute_timezone_score(
+            dev.timezone or "UTC+0", proj.timezone_overlap_required or "UTC+0 to UTC+3",
+            availability_hours=dev.availability_hours, workload_intensity=proj.workload_intensity,
+        )
+        gr = compute_growth_score(dev.career_goals or [], proj.growth_opportunities or [])
+        ms = compute_match_score(
+            w1=weights.w1_skill, w2=weights.w2_workstyle, w3=weights.w3_motivation,
+            w4=weights.w4_timezone, w5=weights.w5_growth,
+            skill_score=skill, workstyle_score=ws, motivation_score=mot,
+            timezone_score=tz, growth_score=gr,
+        )
+        risks = generate_risks(
+            timezone_score=tz, skill_score=skill, workstyle_score=ws,
+            dev_timezone=dev.timezone or "", project_timezone_overlap=proj.timezone_overlap_required or "",
+            developer_skills=dev.skills or [], project_required_skills=proj.required_skills or [],
+        )
+        growth = generate_growth_potential_list(
+            career_goals=dev.career_goals or [], growth_opportunities=proj.growth_opportunities or [],
+            growth_score=gr,
+        )
+        stub = generate_stub_explanation(
+            skill_score=skill, workstyle_score=ws, motivation_score=mot, growth_score=gr,
+            developer_skills=dev.skills or [], project_required_skills=proj.required_skills or [],
+            developer_career_goals=dev.career_goals or [], project_growth_opportunities=proj.growth_opportunities or [],
+        )
+
+        rec = existing_by_proj.get(proj.id)
+        if rec is not None:
+            # Update in place — never delete (FK cascade would drop feedback records).
+            rec.match_score, rec.skill_score, rec.workstyle_score = ms, skill, ws
+            rec.motivation_score, rec.timezone_score, rec.growth_score = mot, tz, gr
+            rec.risks, rec.growth_potential = risks, growth
+            rec.weights_snapshot = weights_snapshot
+            rec.vector_search_degraded = degraded
+            rec.behavioral_data_unavailable = behavioral_unavailable
+            rec.timestamp = now
+            if rec.explanation_source in ("stub_pending", "stub_permanent"):
+                rec.explanation = stub  # keep any Claude-cached explanation intact
+        else:
+            rec = MatchRecord(
+                id=uuid.uuid4(), developer_id=dev.id, project_id=proj.id,
+                match_score=ms, skill_score=skill, workstyle_score=ws, motivation_score=mot,
+                timezone_score=tz, growth_score=gr, explanation=stub,
+                explanation_source="stub_pending", risks=risks, growth_potential=growth,
+                weights_snapshot=weights_snapshot, vector_search_degraded=degraded,
+                behavioral_data_unavailable=behavioral_unavailable, timestamp=now,
+            )
+            db.add(rec)
+        scored.append((rec, proj.name or "Project"))
+
+    await db.flush()
+
+    scored.sort(key=lambda rp: rp[0].match_score, reverse=True)
+    if req.min_score is not None:
+        scored = [rp for rp in scored if rp[0].match_score >= req.min_score]
+    top = scored[: req.top_k]
+
+    return DeveloperMatchesResponse(
+        developer_id=developer_id,
+        matches=[_match_record_to_response(r, project_name=n) for r, n in top],
+        total=len(scored),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /developers/{id}/similar  (WS-B4 — ANN over the 10k developer set, §1 mobility)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SimilarDeveloperItem(BaseModel):
+    """Peer summary — AC8-safe (no raw work_style / motivation vectors)."""
+    developer_id: uuid.UUID
+    skills: list[str]
+    experience_years: int
+    timezone: str
+
+
+class SimilarDevelopersResponse(BaseModel):
+    developer_id: uuid.UUID
+    similar: list[SimilarDeveloperItem]
+    vector_search_degraded: bool
+
+
+@router.get("/{developer_id}/similar", response_model=SimilarDevelopersResponse)
+async def get_similar_developers(
+    developer_id: uuid.UUID,
+    top_k: int = 10,
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+) -> SimilarDevelopersResponse:
+    """Nearest peers by behavioral embedding (ANN over developer_embeddings) — the
+    genuine 10k-scale ANN path, and the basis for internal-mobility suggestions (§1).
+    Raw behavioral vectors are never returned (AC8)."""
+    from src.engine.retrieval import ann_similar_developers, VectorSearchDegraded
+
+    if current_user.role == "developer" and current_user.developer_profile_id != str(developer_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    dev = await db.get(DeveloperProfile, developer_id)
+    if dev is None:
+        raise HTTPException(status_code=404, detail=f"Developer {developer_id} not found")
+
+    degraded = False
+    try:
+        sim_ids = await ann_similar_developers(db, developer_id, top_n=top_k)
+    except VectorSearchDegraded:
+        degraded, sim_ids = True, []
+
+    if not sim_ids:
+        return SimilarDevelopersResponse(
+            developer_id=developer_id, similar=[], vector_search_degraded=degraded
+        )
+
+    rows = (
+        await db.execute(select(DeveloperProfile).where(DeveloperProfile.id.in_(sim_ids)))
+    ).scalars().all()
+    by_id = {d.id: d for d in rows}
+    similar = [
+        SimilarDeveloperItem(
+            developer_id=i, skills=by_id[i].skills or [],
+            experience_years=by_id[i].experience_years, timezone=by_id[i].timezone,
+        )
+        for i in sim_ids if i in by_id  # preserve ANN distance order
+    ]
+    return SimilarDevelopersResponse(
+        developer_id=developer_id, similar=similar, vector_search_degraded=degraded
+    )
