@@ -3,14 +3,15 @@
   "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
   "environment": "local",
   "artifact_ref": "neural-sync:c97d5c5",
-  "url": "http://localhost:63650",
+  "url": "http://localhost:5173",
   "deploy_command": "docker run -d --name neural-sync -e PORT=8080 -p 8080 --memory=512m --cpus=1 --pids-limit=256 --cap-drop=ALL --security-opt=no-new-privileges neural-sync:c97d5c5",
   "health_checks": [
     {
-      "name": "http",
-      "endpoint": "http://localhost:63650/api/v1/health",
-      "expected": "HTTP response (any status = listening)",
-      "actual": "200",
+      "name": "GET / (frontend)",
+      "status": "pass"
+    },
+    {
+      "name": "GET /api/v1/ingestion/connectors",
       "status": "pass"
     }
   ],

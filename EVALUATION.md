@@ -155,10 +155,16 @@ write-up → [`COST-EFFICIENCY.md`](COST-EFFICIENCY.md).
 
 Stated plainly — a clear-eyed limits list is part of an honest evaluation:
 
-1. **`e2e_validation` not yet exercised on the demo.** The browser stage is implemented
-   and the app is now live (a full Docker Compose stack serves the React UI); driving it
-   end-to-end through the `e2e-agent` + Playwright MCP and emitting `e2e_report.json` is
-   the immediate next step.
+1. **`e2e_validation` now exercised end-to-end.** ✅ The `e2e-agent` drove the live app
+   (`http://localhost:5173`) through Playwright MCP and **all 8/8 AC26 ingestion scenarios
+   passed** (manager login → Ingestion tab → ConnectorPicker ≥5 → dropzone → GitLab/Jira
+   forms → preview/commit → developer-role gating negative test), capturing **9 real
+   screenshots** (`artifacts/e2e-screens/`); `e2e_report.json` verdict `passed_with_warnings`,
+   pipeline → `complete`. This was unblocked by a runner fix — `_mcp_tools_from_frontmatter`
+   searched the wrong dir for sub-project agents (so the agent's `mcp__playwright__*` tools
+   were never granted) and the CLI's `cwd=<project>` had no `.mcp.json` to load the Playwright
+   server (`runners.py`, now passes `--mcp-config`). The earlier degraded report (1/8, static
+   inspection, no screenshots) is preserved as `e2e_report.degraded.json`.
 2. **Fully-unattended single-pass run.** The demo used the designed `production_deploy`
    human checkpoint and an operator retry of the deploy stage after the fix; a clean
    single `--yes` pass with no operator touch is supported and worth recording.

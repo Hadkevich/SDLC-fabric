@@ -20,9 +20,11 @@
 > + opt-in scheduler), not stubbed; data-ingestion connectors (live GitLab + HR/Slack/CV/Jira) exist;
 > a real `admin` role + system-override allocations + a paginated 10k roster were added; **measured**
 > p95 < 500ms at 10,050 developers (`projects/neural-sync/artifacts/perf/load_test_report.md`). The
-> factory itself gained a safe **brownfield `--feature`** mode (see `SPEC.md` §8.7). Deliberate
-> deviations (Gemini not Claude; pgvector not Pinecone/Weaviate; sandbox-limited deploy/e2e) are
-> documented, not hidden.
+> factory itself gained a safe **brownfield `--feature`** mode (see `SPEC.md` §8.7), an
+> **agent-driven Git flow** (`--git-flow`), measured **cache-savings + parallelism** in the cost
+> report, a reproducible **resilience demo** (`scripts/inject_failure.py`), and a **real
+> browser-driven `e2e_validation`** (8/8 AC26 scenarios, 9 screenshots) against the live app.
+> Deliberate deviations (Gemini not Claude; pgvector not Pinecone/Weaviate) are documented, not hidden.
 
 ---
 
@@ -50,13 +52,13 @@ schema-wins rule stated in §1).
 | 2.2 | Passes structured outputs between agents (not free-form chat) | ✅ | Every output schema-validated at the gate (`validation.py` `validate_artifact`, `schema_for_output`; `engine.py` `_check`) |
 | 2.3 | Tracks state of the entire workflow | ✅ | `workflow_state.json` single source of truth, atomic write+rename (`engine.py` `_persist`); reconstructable by folding `events.log.jsonl` |
 | 2.4 | Agent runtime + memory layer + tooling layer | ✅ | Runtime: `runners.py` `ClaudeAgentRunner` (spawns `claude --agent <role>`). Memory: artifact files + event log. Tooling: per-agent least-privilege tool lists |
-| S2.a | *Stretch:* multi-agent parallelization | 🟡 | Engine runs independent tasks concurrently (`_run_wave`, `ThreadPoolExecutor`, `max_parallel`). Caveat: confirm parallel developer tasks write **task-scoped** `code_spec/<task_id>.json` (planner rule, `planner.agent.md`) so outputs don't collide — see `EVALUATION.md` |
-| S2.b | *Stretch:* self-improving / feedback loop | ✅ | Bounded fix loops at three points: a rejected review and a failed e2e run (`_request_rework`/`_drain_rework`/`_apply_rework`; per-stage cap `STAGE_REWORK_CAP` — review 2, e2e 1), **and a closed `monitoring_feedback` loop** — an unhealthy deploy drives a Level-1 in-run health rework (cap 1) then up to `max_feedback_cycles` Level-2 cross-run re-plans where the **product agent folds `backlog.json` into updated requirements** (`engine.py:_try_health_rework`/`_try_feedback_cycle`/`_append_backlog`; `--feedback-loop N`; default 0 = signal only). Live runtime telemetry beyond the deploy health probe (APM/error-rate) remains future work (`SPEC.md §3.9`) |
-| S2.c | *Stretch:* cost/performance optimization | ✅ | Per-role model strategy (opus/sonnet/haiku, `SPEC.md §4`); per-task cost/token metrics folded from the event log; optional `max_cost_usd` breaker (`SPEC.md §9`). Full Cost & Efficiency write-up → [`COST-EFFICIENCY.md`](COST-EFFICIENCY.md) |
-| 7.1 | *Scorecard:* auto-collected tokens/cost/time per agent role | ✅ | `cost_reporter.py` folds `events.log.jsonl` → `artifacts/cost_report.{json,md}` (auto at run finalization + `--cost-report`); schema `schemas/cost_report.schema.json`. Recorded run total **$16.51** / 16.2M tok / 5611s |
+| S2.a | *Stretch:* multi-agent parallelization | ✅ | Engine runs independent tasks concurrently (`_run_wave`, `ThreadPoolExecutor`, `max_parallel`). **Measured** from the run's own event log (`cost_reporter.compute_parallelism`, interval-union of overlapping task durations): **1.10× overall**, **1.33× on the architecture wave** (api-contracts ∥ data-model) — surfaced in `cost_report.{json,md}`. Parallel developer tasks write task-scoped `code_spec/<task_id>.json` (planner rule) so outputs don't collide |
+| S2.b | *Stretch:* self-improving / feedback loop | ✅ | Bounded fix loops at three points: a rejected review and a failed e2e run (`_request_rework`/`_drain_rework`/`_apply_rework`; per-stage cap `STAGE_REWORK_CAP` — review 2, e2e 1), **and a closed `monitoring_feedback` loop** — an unhealthy deploy drives a Level-1 in-run health rework (cap 1) then up to `max_feedback_cycles` Level-2 cross-run re-plans where the **product agent folds `backlog.json` into updated requirements** (`engine.py:_try_health_rework`/`_try_feedback_cycle`/`_append_backlog`; `--feedback-loop N`; default 0 = signal only). **Demoed live** (real engine, no LLM) via `scripts/inject_failure.py health` — an unhealthy deploy drives the Level-1 loop and `backlog.json` goes `open`→`resolved` (`docs/RESILIENCE-DEMO.md`). Live runtime telemetry beyond the deploy health probe (APM/error-rate) remains future work (`SPEC.md §3.9`) |
+| S2.c | *Stretch:* cost/performance optimization | ✅ | Per-role model strategy (opus/sonnet/haiku, `SPEC.md §4`); per-task cost/token metrics folded from the event log; optional `max_cost_usd` breaker (`SPEC.md §9`). **Measured prompt-cache savings**: the report prices each role's `cache_read`/`cache_creation` tokens at its model tier — the run shows **14.8M cached-read tok → ≈ $39.8 saved** (`cost_reporter._cache_savings_usd`). Full write-up → [`COST-EFFICIENCY.md`](COST-EFFICIENCY.md) |
+| 7.1 | *Scorecard:* auto-collected tokens/cost/time per agent role | ✅ | `cost_reporter.py` folds `events.log.jsonl` → `artifacts/cost_report.{json,md}` (auto at run finalization + `--cost-report`); schema `schemas/cost_report.schema.json`. Now also reports per-role **prompt-cache savings** and **measured parallelism**. Cumulative run (incl. ingestion feature + real e2e): **$47.17** / 65.3M tok / 12916s, **≈ $39.8 saved by caching**, **1.10× parallel** |
 | 7.2 | *Scorecard:* different models per role (routing in code) | ✅ | opus (architect, reviewer) · sonnet (developer/planner/product/qa/e2e/orchestrator) · haiku (devops), pinned in `.claude/agents/*.agent.md` frontmatter (`SPEC.md §4`) |
 | 7.3 | *Scorecard:* A/B evidence cheaper model is good enough | ✅ | Live micro-A/B (`scripts/cost_ab_experiment.py`) runs the "log summarizer" task across haiku/sonnet/opus → `artifacts/cost_ab_experiment.{json,md}` |
-| S2.d | *Stretch:* Git integration (agent-driven PRs) | ❌ | Not implemented; deploy is local-Docker. Candidate next step |
+| S2.d | *Stretch:* Git integration (agent-driven PRs) | ✅ | `--git-flow` ships a healthy run via a real PR: branch → commit → push → `gh pr create` → post the **reviewer agent's verdict** (`review_report.json`) as the PR review comment → squash-merge (`src/orchestrator/scm.py`, `scm-agent` role, `scm_report.json`). Gated on `gh auth`; degrades gracefully (merged → pr_open → local_only → skipped). Tested in `tests/test_scm.py` |
 
 ### Phase 3 — Prove It Works (end-to-end demo)
 
@@ -71,7 +73,7 @@ The demo project is **`projects/neural-sync/`** — the Task-04 NEURAL SYNC app
 | 3.4 | Code generated | ✅ | `projects/neural-sync/src/**` + `frontend/src/**`; `artifacts/code_spec.json` |
 | 3.5 | Tests created & executed | ✅ | `artifacts/test_plan.json` — **108/108 pass, 0 failed** (77 at the original recorded run), all 13 acceptance criteria covered |
 | 3.6 | Deployment automated (local or cloud) | ✅ | DevOps path builds the Dockerfile, runs a hardened local container, and health-checks it → `release_report.json` verdict `success` (`environment: local`, live URL, HTTP health check `pass`, image retained as rollback handle). Gate passed: review `approved_with_comments` + tests `failed == 0` |
-| 3.7 | Deployed app validated in a real browser *(extra, beyond brief)* | 🟡 | `e2e_validation` stage (`e2e-agent` + Playwright MCP) drives the live UI per acceptance criterion → `e2e_report.json` (`SPEC.md §3.8`; schema `schemas/e2e_report.schema.json`; example `artifacts/e2e_report.example.json`). **Caveat:** the run now reaches deployment and the app is live, but the browser stage has not yet been exercised end-to-end on the demo — capability exists; it is the immediate next step (`EVALUATION.md` → Known limitations) |
+| 3.7 | Deployed app validated in a real browser *(extra, beyond brief)* | ✅ | `e2e_validation` stage (`e2e-agent` + Playwright MCP) **exercised end-to-end** on the live app (`http://localhost:5173`): all **8/8 AC26 ingestion scenarios passed** in a real browser (manager login → Ingestion tab → ConnectorPicker ≥5 → dropzone → GitLab/Jira forms → preview/commit → role-gating negative test), **9 real screenshots** in `artifacts/e2e-screens/`, `e2e_report.json` verdict `passed_with_warnings`, pipeline → `complete` (`SPEC.md §3.8`; schema `schemas/e2e_report.schema.json`). Enabled by the runner fix that grants the agent's `mcp__playwright__*` tools + loads `.mcp.json` for sub-projects (`runners.py`) |
 
 ### Success criteria
 
@@ -163,10 +165,12 @@ Evidence paths are under `projects/neural-sync/`.
   re-approved, and deployment passed (`release_report.json` verdict `success`, live local
   container). The honest claim is "built through review + QA by agents, caught its own
   defect at the review gate, and deployed only after the fix."
-- **Open items** (remaining 🟡 / breadth, not capability gaps): exercise the
-  `e2e_validation` browser stage on the live UI (3.7), record one fully-unattended `--yes`
-  pass, exercise the embeddings/ANN path (N6), add an Admin page (N15), and add Git/PR + CI
-  automation (S2.d).
+- **Closed since the recorded run**: the `e2e_validation` browser stage is now exercised
+  end-to-end on the live UI (3.7 — 8/8 AC26 scenarios, 9 screenshots); the feedback loop is
+  demoed live (S2.b); cache-savings + parallelism are measured in the cost report (S2.a/S2.c);
+  agent-driven Git flow is implemented (S2.d).
+- **Open items** (breadth, not capability gaps): exercise the embeddings/ANN path (N6) and add
+  an Admin page (N15).
 
 Full narrative and per-item detail: **`EVALUATION.md`**.
 Architecture detail: **`ARCHITECTURE-DIAGRAM.md`**. Authoritative spec: **`SPEC.md`**.

@@ -1,6 +1,6 @@
 {
   "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
-  "report_generated_at": "2026-06-28T06:12:08.829468+00:00",
+  "report_generated_at": "2026-06-28T06:56:24.293964+00:00",
   "by_agent_role": {
     "developer-agent": {
       "model": "sonnet",
@@ -44,6 +44,20 @@
       "events_with_metrics": 4,
       "coverage": "partial"
     },
+    "e2e-agent": {
+      "model": "sonnet",
+      "total_cost_usd": 7.470938,
+      "input_tokens": 15648279,
+      "output_tokens": 67291,
+      "total_tokens": 15715570,
+      "cache_read_input_tokens": 14803659,
+      "cache_creation_input_tokens": 195217,
+      "cache_savings_usd": 39.823467,
+      "total_duration_ms": 1790586.0,
+      "event_count": 2,
+      "events_with_metrics": 2,
+      "coverage": "full"
+    },
     "qa-agent": {
       "model": "sonnet",
       "total_cost_usd": 6.271204,
@@ -86,20 +100,6 @@
       "events_with_metrics": 2,
       "coverage": "full"
     },
-    "e2e-agent": {
-      "model": "sonnet",
-      "total_cost_usd": 0.957091,
-      "input_tokens": 649247,
-      "output_tokens": 17936,
-      "total_tokens": 667183,
-      "cache_read_input_tokens": 0,
-      "cache_creation_input_tokens": 0,
-      "cache_savings_usd": 0.0,
-      "total_duration_ms": 345631.0,
-      "event_count": 1,
-      "events_with_metrics": 1,
-      "coverage": "full"
-    },
     "devops-agent": {
       "model": "haiku",
       "total_cost_usd": 0.795811,
@@ -124,29 +124,29 @@
       "cache_creation_input_tokens": 0,
       "cache_savings_usd": 0.0,
       "total_duration_ms": 0.0,
-      "event_count": 7,
+      "event_count": 8,
       "events_with_metrics": 0,
       "coverage": "none"
     }
   },
   "totals": {
-    "cost_usd": 40.660159,
-    "input_tokens": 49595842,
-    "output_tokens": 676065,
-    "total_tokens": 50271907,
-    "cache_read_input_tokens": 0,
-    "cache_creation_input_tokens": 0,
-    "cache_savings_usd": 0.0,
-    "duration_ms": 11471178.0,
-    "event_count": 39
+    "cost_usd": 47.174005,
+    "input_tokens": 64594874,
+    "output_tokens": 725420,
+    "total_tokens": 65320294,
+    "cache_read_input_tokens": 14803659,
+    "cache_creation_input_tokens": 195217,
+    "cache_savings_usd": 39.823467,
+    "duration_ms": 12916133.0,
+    "event_count": 41
   },
   "notes": [
     "orchestrator-agent: monitoring_feedback is orchestration logic \u2014 no LLM call"
   ],
   "parallelism": {
-    "serial_agent_ms": 11471178.0,
-    "wallclock_ms": 10283656.0,
-    "speedup": 1.115,
+    "serial_agent_ms": 12916133.0,
+    "wallclock_ms": 11728611.0,
+    "speedup": 1.101,
     "waves": [
       {
         "stage": "planning_architecture",
