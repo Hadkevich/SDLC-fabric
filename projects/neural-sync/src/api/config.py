@@ -124,12 +124,12 @@ async def update_weights(
     The matching engine reads from this table on every request with no in-process cache.
 
     Returns HTTP 400 (preserving previous config) on constraint violation.
-    Manager role required.
+    Admin role required — weight tuning is an Admin View capability (Task04 §6).
     """
-    if current_user.role != "manager":
+    if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Manager role required to update matching weights",
+            detail="Admin role required to tune matching weights",
         )
 
     config = await _get_or_create_weight_config(db)

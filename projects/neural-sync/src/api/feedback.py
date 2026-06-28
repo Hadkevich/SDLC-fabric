@@ -165,8 +165,8 @@ async def get_erasure_audit(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> ErasureAuditRecord:
-    if current_user.role != "manager":
-        raise HTTPException(status_code=403, detail="Manager role required")
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
 
     result = await db.execute(
         select(ErasureAuditLog)
@@ -199,14 +199,16 @@ async def trigger_reembed(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> AsyncJobResponse:
-    if current_user.role != "manager":
-        raise HTTPException(status_code=403, detail="Manager role required")
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required (system re-embedding)")
 
-    job_id = uuid.uuid4()
+    from src.services.reoptimization import reembed_all_developers
+
+    n = await reembed_all_developers(db)
     return AsyncJobResponse(
-        job_id=job_id,
-        message="Re-embedding job accepted and queued for all profiles",
-        estimated_count=None,
+        job_id=uuid.uuid4(),
+        message=f"Re-embedded {n} developer profile(s)",
+        estimated_count=n,
     )
 
 
@@ -219,13 +221,16 @@ async def refresh_risk_scores(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> AsyncJobResponse:
-    if current_user.role != "manager":
-        raise HTTPException(status_code=403, detail="Manager role required")
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required (system risk refresh)")
 
-    job_id = uuid.uuid4()
+    from src.services.reoptimization import refresh_all_risk_scores
+
+    n = await refresh_all_risk_scores(db)
     return AsyncJobResponse(
-        job_id=job_id,
-        message="Risk score refresh job accepted for all developers",
+        job_id=uuid.uuid4(),
+        message=f"Refreshed cached risk scores for {n} developer(s)",
+        estimated_count=n,
     )
 
 
@@ -257,6 +262,8 @@ _TEAM_DISPLAY_NAMES = [
 @router.get("/teams/{team_id}/risk-summary", response_model=TeamRiskSummary)
 async def get_team_risk_summary(
     team_id: uuid.UUID,
+    limit: Optional[int] = None,
+    offset: int = 0,
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> TeamRiskSummary:
@@ -267,8 +274,8 @@ async def get_team_risk_summary(
     returned (scoping by team_id is deferred to Phase 2). Raw behavioral vectors
     are never included in the response.
     """
-    if current_user.role != "manager":
-        raise HTTPException(status_code=403, detail="Manager role required")
+    if current_user.role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
 
     # Load all developer profiles with their allocation records in one query
     result = await db.execute(
@@ -355,9 +362,16 @@ async def get_team_risk_summary(
         else:
             dist.bench_low_count += 1
 
+    # Optional pagination of the member roster (member_count and the distribution
+    # remain whole-team accurate; only the returned members list is windowed).
+    total_members = len(members)
+    if limit is not None:
+        start = max(0, offset)
+        members = members[start : start + max(1, limit)]
+
     return TeamRiskSummary(
         team_id=team_id,
-        member_count=len(members),
+        member_count=total_members,
         members=members,
         risk_distribution=dist,
         computed_at=datetime.now(timezone.utc),

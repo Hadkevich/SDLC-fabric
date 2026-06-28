@@ -1,0 +1,66 @@
+{
+  "spec_version": "v1",
+  "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
+  "task_id": "T-10-CONNECTORS",
+  "title": "Backend: Connector Abstraction and Five Source Connectors (GitLab, HR, Slack, CV, Jira)",
+  "files_affected": [
+    {
+      "path": "src/connectors/__init__.py",
+      "change_type": "created",
+      "description": "Package init: exports SourceDocument, BaseConnector, and all five concrete connectors (GitLabConnector, HRConnector, SlackConnector, CVConnector, JiraConnector)."
+    },
+    {
+      "path": "src/connectors/base.py",
+      "change_type": "created",
+      "description": "SourceDocument dataclass (external_id, display_name, email, cv_text, git_log_text, slack_text, optional: timezone, availability_hours, experience_years, source) and BaseConnector ABC with kind/'file'|'network', availability/'live'|'credential-gated', errors:list[str], abstract fetch() generator, and connector_info() helper."
+    },
+    {
+      "path": "src/connectors/gitlab_connector.py",
+      "change_type": "created",
+      "description": "GitLabConnector: kind='network', availability='live'. Fetches commit messages (via project commits API or user push events API) and merge-request titles via httpx. Supports optional PRIVATE-TOKEN, configurable base_url (default https://gitlab.com), per-request timeout, and GITLAB_MAX_PAGES page cap. Degrades gracefully on 401/429/network errors — populates self.errors and yields a degraded SourceDocument; never raises. [AC19]"
+    },
+    {
+      "path": "src/connectors/hr_connector.py",
+      "change_type": "created",
+      "description": "HRConnector: kind='file', availability='live'. Parses employee CSV or JSON from in-memory bytes. Case-insensitive tolerant column mapping: name→display_name, email→email, title/role/bio→cv_text, skills appended, weekly_hours→availability_hours, years_experience→experience_years, timezone→timezone. Yields one SourceDocument per employee row; parse errors are logged and captured in self.errors without raising. [AC17]"
+    },
+    {
+      "path": "src/connectors/slack_connector.py",
+      "change_type": "created",
+      "description": "SlackConnector: kind='file', availability='live'. Parses Slack workspace export JSON from in-memory bytes. Supports dict-of-lists format {'channels': {'name': [messages]}} and list-of-dicts format {'channels': [{'name':..., 'messages':[...]}]}. Aggregates each user's messages across all channels into slack_text. Yields one SourceDocument per user; JSON decode errors captured in self.errors. [AC18]"
+    },
+    {
+      "path": "src/connectors/cv_connector.py",
+      "change_type": "created",
+      "description": "CVConnector: kind='file', availability='live'. Parses a single .txt or .md file (UTF-8) into cv_text, yielding one SourceDocument. Optional PDF support guarded by conditional import: tries PyMuPDF (fitz) then pdfminer.six. When neither PDF library is available, pdf_supported() returns False, PDF uploads yield a degraded SourceDocument with empty cv_text, and the error is recorded in self.errors — never raises. [AC15, AC16]"
+    },
+    {
+      "path": "src/connectors/jira_connector.py",
+      "change_type": "created",
+      "description": "JiraConnector: kind='network', availability='credential-gated'. Reads assigned Jira issues (summary, labels, comments) via Jira REST API v3 using httpx Basic Auth (email:token). Documents required credentials: base_url, email, token, project_key. validate_credentials() called before any network call — missing credentials populate self.errors with per-field messages and yield zero SourceDocuments. Supports optional usernames filter; degrades on 401/403/429/network errors. [AC20]"
+    }
+  ],
+  "implementation_notes": "All connectors implement the BaseConnector ABC from src/connectors/base.py. The SourceDocument dataclass is the normalized inter-layer data transfer object carrying three text channels (cv_text, git_log_text, slack_text) consumed by enrich_profile. Every connector initializes self.errors=[] in __init__ and populates it during fetch() for any degradation notices; the ETL orchestrator (T-11) reads self.errors and forwards them to IngestionSummary.errors. No connector raises an unhandled exception or causes HTTP 5xx. File connectors (HR, Slack, CV) process data entirely in memory. Network connectors (GitLab, Jira) use httpx.Client with per-request timeouts. GitLab token is optional ('live'); Jira requires all four credentials ('credential-gated'). CVConnector.pdf_supported() is a classmethod reflecting runtime PDF library availability. No existing Phase-1 source files were modified by this task.",
+  "contracts_satisfied": [
+    "AC15: CV connector parses .txt and .md files; optional PDF support guarded by conditional import; when PDF library is unavailable the connector reports unavailability via self.errors rather than raising.",
+    "AC16: CV connector yields one SourceDocument per file, carrying cv_text for enrich_profile consumption; commit-mode ingestion path reuses this in T-11.",
+    "AC17: HR connector parses CSV and JSON from in-memory bytes with case-insensitive tolerant column mapping (name, email, title/role/bio→cv_text, skills appended, weekly_hours→availability_hours, years_experience→experience_years, timezone); yields one SourceDocument per employee row.",
+    "AC18: Slack connector parses Slack export JSON from in-memory bytes; aggregates each user's channel messages into slack_text; yields one SourceDocument per user.",
+    "AC19: GitLab connector uses httpx (not python-gitlab); pulls commit messages and MR titles into git_log_text; supports optional token and configurable base_url (default https://gitlab.com); respects per-request timeout and GITLAB_MAX_PAGES page cap; missing/invalid token returns a degraded SourceDocument, never an exception or HTTP 5xx.",
+    "AC20: Jira connector reads assigned issues, labels, and comments via Jira REST API with httpx; populates git_log_text; documents required credentials (base_url, email, token, project_key); missing credentials populate self.errors with per-field messages and yield zero SourceDocuments — never raises or returns HTTP 5xx.",
+    "AC29: ConnectorInfo-compatible descriptor dict produced by connector_info() on each connector instance, exposing kind and availability fields as defined in the ConnectorInfo schema in api-contracts.json.",
+    "AC30: All five connectors (gitlab, hr, slack, cv, jira) implement the BaseConnector abstraction and degrade gracefully on all documented failure modes (rate-limit, missing-credentials, oversized-upload)."
+  ],
+  "test_refs": [
+    "tests/test_connectors.py (to be created by T-14-QA-INGESTION): unit tests for all five connectors using in-memory bytes and mock httpx transports.",
+    "tests/test_ingestion_api.py (T-14): tests POST /ingestion/file, POST /ingestion/gitlab, POST /ingestion/jira against connector behavior.",
+    "tests/integration/test_ingestion_pipeline.py (T-14): end-to-end test: HR CSV → HRConnector → ETL orchestrator → IngestionSummary.",
+    "tests/test_enrichment.py (existing, 120 tests all passing): no regressions introduced by this task."
+  ],
+  "known_limitations": [
+    "GitLab: when no project is specified, commit messages are retrieved from the user push-events API (only the most recent commit title per push event is available, not full commit history). Providing a project path enables full commit log retrieval.",
+    "Jira: the connector uses Jira REST API v3 comment body extraction which handles both plain-text and Atlassian Document Format (ADF) dict bodies; ADF bodies use the 'text' field from the root node only.",
+    "CV: PDF support is compile-time optional and not installed in the default requirements.txt. Install pymupdf or pdfminer.six to enable PDF parsing.",
+    "Slack: the connector handles JSON-format exports only (not Slack's ZIP export format). The ZIP format must be unpacked to the supported JSON structure before passing to SlackConnector."
+  ]
+}

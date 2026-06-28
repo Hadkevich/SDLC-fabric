@@ -357,6 +357,56 @@ class Orchestrator:
         # prelude done → workplan.json now exists → run the DAG phase
         return self.run()
 
+    def extend_with_feature(self, request: str) -> dict:
+        """Brownfield extension: add a NEW feature to an already-COMPLETE project.
+
+        Re-opens ONLY the two prelude tasks (STAGE-REQUIREMENTS, STAGE-PLAN) so the
+        product agent *amends* requirements.json and the planner emits an *additive*
+        workplan — every existing DAG task keeps ``status:"success"`` and is therefore
+        skipped by :meth:`_run_dag` (so generated source is never re-run, and never
+        ``unlink``-ed by the rework path). This is the non-destructive counterpart to
+        the Level-2 monitoring-feedback re-plan, which deliberately reseeds the whole
+        DAG; brownfield extension must NOT reseed.
+
+        Safe only from a terminal ``complete`` state — refuses on an in-flight or
+        failed run (use --retry / resume for those). Idempotent: re-running after a
+        successful extension re-opens the prelude again; an unchanged additive plan
+        leaves every feature task ``success`` and is itself a no-op.
+        """
+        if not self.state_path.exists():
+            raise Escalation(
+                "no workflow_state.json to extend — start the project with --prompt first"
+            )
+        state = json.loads(self.state_path.read_text())
+        if state.get("current_stage") != "complete":
+            raise Escalation(
+                "extend_with_feature requires a COMPLETE workflow; current stage is "
+                f"'{state.get('current_stage')}'. Resume or --retry the in-flight run first."
+            )
+
+        # Re-open ONLY the prelude tasks; leave every DAG task 'success' (skipped).
+        for tid in (t["task_id"] for t in PRELUDE_TASKS):
+            ts = state.get("tasks", {}).get(tid)
+            if ts is not None:
+                ts["status"] = "pending"
+                ts["attempt"] = 0
+                for k in ("started_at", "completed_at", "artifact_refs", "blocking_issues"):
+                    ts.pop(k, None)
+        for stage in ("requirement_ingestion", "task_decomposition"):
+            if stage in state.get("stages", {}):
+                state["stages"][stage]["status"] = "pending"
+
+        state["prompt_driven"] = True
+        state["halted"] = False
+        state["current_stage"] = "requirement_ingestion"
+        self._persist(state)  # run_from_prompt re-reads state from disk, so persist first
+        self._event(
+            state, "requirement_ingestion", "orchestrator-agent", "retry",
+            summary="brownfield feature extension — re-opening prelude (product+planner) "
+                    "additively; existing DAG tasks remain success and are skipped",
+        )
+        return self.run_from_prompt(request)
+
     def _run_prelude(self, request, state) -> str:
         """Run the three pre-DAG stages in order. Returns 'ok'|'paused'|'failed'."""
         for spec in PRELUDE_TASKS:

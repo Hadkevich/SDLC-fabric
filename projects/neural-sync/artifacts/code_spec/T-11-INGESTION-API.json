@@ -1,0 +1,77 @@
+{
+  "spec_version": "v1",
+  "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
+  "task_id": "T-11-INGESTION-API",
+  "title": "Backend: Ingestion API Endpoints, ETL Orchestrator, Shared create-plus-embed Helper, and Settings (in-place merge of src/api/developers.py, src/core/settings.py, .env.example)",
+  "files_affected": [
+    {
+      "path": "src/core/helpers.py",
+      "change_type": "created",
+      "description": "Shared create-plus-embed helper. Exports _enqueue_embeddings (background task: generates and persists developer embeddings via generate_developer_embeddings, updates embedding_status) and create_developer_profile (async function: creates a DeveloperProfile ORM row, flushes to session, enqueues embeddings via BackgroundTasks). Both POST /api/v1/developers and commit-mode ingestion call this single code path — no duplication [AC16, AC23]."
+    },
+    {
+      "path": "src/etl/__init__.py",
+      "change_type": "created",
+      "description": "ETL pipeline package init. Re-exports IngestionSummary, DraftProfile, and run_ingestion from src.etl.orchestrator."
+    },
+    {
+      "path": "src/etl/orchestrator.py",
+      "change_type": "created",
+      "description": "ETL orchestrator implementing IngestionSummary (Pydantic: extracted, enriched, skipped, created, provenance{llm,heuristic}, errors, drafts), DraftProfile (Pydantic preview record), and run_ingestion() async function. Enforces INGESTION_MAX_RECORDS batch cap before processing. Calls enrich_profile via asyncio.to_thread for each SourceDocument. Records with empty skills are counted in skipped; remaining records continue. Provenance counts (llm, heuristic) satisfy provenance.llm + provenance.heuristic == enriched [AC24, AC25]. Preview mode populates drafts and sets created=0; commit mode calls create_developer_profile from src.core.helpers [AC15, AC16, AC23]."
+    },
+    {
+      "path": "src/api/ingestion.py",
+      "change_type": "created",
+      "description": "Ingestion API router (prefix=/ingestion, tag=ingestion). GET /connectors: returns ConnectorInfo list for all 5 connectors (gitlab, hr, slack, cv, jira) using connector_info() method; secured by require_manager [AC14]. POST /file: reads UploadFile into memory, enforces MAX_UPLOAD_BYTES before parsing (HTTP 413 on exceed, no disk writes), dispatches to CVConnector/HRConnector/SlackConnector [AC22]. POST /gitlab: delegates to GitLabConnector with settings.gitlab_base_url and settings.gitlab_max_pages; missing/invalid token returns degraded IngestionSummary, never HTTP 5xx [AC19]. POST /jira: delegates to JiraConnector; credential validation in connector returns degraded result with errors list, never HTTP 5xx [AC20]. All endpoints use require_manager: developer-role JWTs get HTTP 403, unauthenticated get HTTP 401 [AC21]. Router registered in src/main.py."
+    },
+    {
+      "path": "src/api/developers.py",
+      "change_type": "modified",
+      "description": "In-place merge: removed local _enqueue_embeddings function; added import of create_developer_profile and _enqueue_embeddings from src.core.helpers. The create_developer route now calls create_developer_profile() from the shared helper; update_developer continues to call background_tasks.add_task(_enqueue_embeddings, ...) using the imported function. All other existing routes, models, and logic preserved intact [AC16, AC23]."
+    },
+    {
+      "path": "src/core/settings.py",
+      "change_type": "modified",
+      "description": "In-place merge: added 8 new settings to the Settings class — GITLAB_BASE_URL (default https://gitlab.com), GITLAB_TOKEN (default ''), GITLAB_MAX_PAGES (default 10), JIRA_BASE_URL (default ''), JIRA_EMAIL (default ''), JIRA_TOKEN (default ''), MAX_UPLOAD_BYTES (default 10485760), INGESTION_MAX_RECORDS (default 500). All existing settings preserved [AC28]."
+    },
+    {
+      "path": ".env.example",
+      "change_type": "modified",
+      "description": "In-place merge: added documentation section for all 8 new environment variables (GITLAB_BASE_URL, GITLAB_TOKEN, GITLAB_MAX_PAGES, JIRA_BASE_URL, JIRA_EMAIL, JIRA_TOKEN, MAX_UPLOAD_BYTES, INGESTION_MAX_RECORDS) with safe defaults and inline comments describing purpose, units, and generation instructions. All existing variables preserved [AC28]."
+    },
+    {
+      "path": "src/main.py",
+      "change_type": "modified",
+      "description": "Registered ingestion router: added 'from src.api import ingestion' and app.include_router(ingestion.router, prefix=PREFIX) so all /api/v1/ingestion/* endpoints are served by the FastAPI application."
+    }
+  ],
+  "implementation_notes": "The shared create-plus-embed helper (src/core/helpers.py) is the single profile-creation code path for both POST /api/v1/developers and commit-mode ETL ingestion. _enqueue_embeddings was extracted from src/api/developers.py into src/core/helpers.py; developers.py imports and uses it for the PUT endpoint while delegating the POST endpoint to create_developer_profile(). The ETL orchestrator (src/etl/orchestrator.py) uses asyncio.to_thread to call the synchronous enrich_profile() off the event loop, preventing LLM calls from blocking concurrent requests. IngestionSummary and DraftProfile are Pydantic models defined in the orchestrator and re-exported from the etl package; this avoids circular imports between src/api/ingestion.py and src/etl/orchestrator.py. The ingestion API endpoints are secured exclusively by require_manager from src/core/auth.py — the same dependency used by the config and admin endpoints. File uploads are read into memory with UploadFile.read() and size-checked against settings.max_upload_bytes before any connector parsing begins; nothing is written to disk. The GitLab connector uses settings.gitlab_base_url and settings.gitlab_max_pages as defaults, with request-level overrides supported. The Jira connector validates all four credentials inside the connector's fetch() call before any network activity, returning a degraded IngestionSummary with errors when credentials are incomplete. INGESTION_MAX_RECORDS enforcement happens inside run_ingestion() before any enrich_profile calls, with truncated count and an error notice added to IngestionSummary.errors. Provenance tracking: provenance.llm and provenance.heuristic are incremented per enriched record based on EnrichmentResult.provenance; the sum always equals enriched count [AC25]. Records with empty skills are counted in skipped and excluded from DeveloperProfile creation in both preview and commit modes [AC24].",
+  "contracts_satisfied": [
+    "AC14: GET /api/v1/ingestion/connectors returns HTTP 200 with a JSON array of ≥5 ConnectorInfo descriptors (gitlab, hr, slack, cv, jira); each includes kind ('file' or 'network') and availability ('live' or 'credential-gated'); secured by require_manager.",
+    "AC15: Preview mode (mode=preview): run_ingestion returns IngestionSummary with drafts populated and created=0; no DeveloperProfile row is persisted.",
+    "AC16: Commit mode (mode=commit): run_ingestion calls create_developer_profile (shared helper) for each enriched record; IngestionSummary.created ≥1 on success; embeddings enqueued via BackgroundTasks. POST /api/v1/developers and commit-mode ingestion share the same create-plus-embed code path.",
+    "AC19: POST /api/v1/ingestion/gitlab delegates to GitLabConnector; missing or invalid token yields degraded IngestionSummary with errors entry, never HTTP 5xx.",
+    "AC20: POST /api/v1/ingestion/jira delegates to JiraConnector; missing/invalid credentials return HTTP 200 with IngestionSummary.errors documenting missing fields, never HTTP 5xx.",
+    "AC21: All /api/v1/ingestion/* endpoints use require_manager from src/core/auth.py; developer-role JWTs receive HTTP 403; unauthenticated requests receive HTTP 401.",
+    "AC22: POST /api/v1/ingestion/file reads file content into memory first; enforces MAX_UPLOAD_BYTES before any connector parsing; HTTP 413 returned for oversized payloads; no disk writes at any point.",
+    "AC23: Shared create-plus-embed helper in src/core/helpers.py is the single DeveloperProfile creation code path; both src/api/developers.py (create_developer route) and src/etl/orchestrator.py (commit mode) import and call create_developer_profile().",
+    "AC24: ETL orchestrator calls enrich_profile via asyncio.to_thread for each SourceDocument; records where enrich_profile returns empty skills list are counted in IngestionSummary.skipped and excluded from DeveloperProfile creation; remaining batch records continue processing; HTTP response is 200.",
+    "AC25: IngestionSummary.provenance.llm and provenance.heuristic are populated from EnrichmentResult.provenance for each enriched record; provenance.llm + provenance.heuristic equals enriched count at all times.",
+    "AC28: src/core/settings.py updated with 8 new settings: GITLAB_BASE_URL (default https://gitlab.com), GITLAB_TOKEN (default ''), GITLAB_MAX_PAGES (default 10), JIRA_BASE_URL (default ''), JIRA_EMAIL (default ''), JIRA_TOKEN (default ''), MAX_UPLOAD_BYTES (default 10485760), INGESTION_MAX_RECORDS (default 500). .env.example updated with all 8 variables documented with safe defaults and inline comments.",
+    "AC29: ConnectorInfo schema response matches api-contracts.json definition with fields: source, display_name, kind, availability, description, required_credentials, accepted_file_types.",
+    "AC30: All five connectors (gitlab, hr, slack, cv, jira) are surfaced through GET /ingestion/connectors using their connector_info() methods."
+  ],
+  "test_refs": [
+    "tests/test_ingestion_api.py (T-14-QA-INGESTION): GET /ingestion/connectors returns ≥5 entries with kind and availability; POST /file enforces HTTP 413; POST /gitlab degrades gracefully on missing token; POST /jira returns HTTP 200 with errors for missing credentials.",
+    "tests/test_ingestion_auth.py (T-14): all /api/v1/ingestion/* endpoints return HTTP 403 for developer-role JWT and HTTP 401 for unauthenticated request; manager-role JWT accepted.",
+    "tests/test_connectors.py (T-14): unit tests for HR/Slack/CV/GitLab/Jira connectors using in-memory bytes and mock httpx transports.",
+    "tests/integration/test_ingestion_pipeline.py (T-14): end-to-end test: HR CSV connector → run_ingestion() → MockAsyncSession.added verifies DeveloperProfile rows created; embeddings enqueued via BackgroundTasks mock.",
+    "tests/test_enrichment.py (existing, 120 tests all passing): no regressions introduced by this task."
+  ],
+  "known_limitations": [
+    "Ingestion commit mode does not create UserAccount rows — ingested profiles are anonymous DeveloperProfiles without associated login credentials. A separate onboarding step would be needed to link ingested profiles to user accounts.",
+    "File upload size check uses UploadFile.read() which loads the entire body into memory before checking. For production deployments with very large files, a streaming size check (Content-Length header + read-in-chunks) would be more memory-efficient. The current implementation is sufficient for the 10 MB default limit.",
+    "The GitLab connector's base_url defaults to settings.gitlab_base_url when not provided in the request body; this allows instance-wide configuration via GITLAB_BASE_URL without per-request overhead.",
+    "career_goals fallback: when enrich_profile returns an empty career_goals list, the orchestrator substitutes ['general software development'] to satisfy the DeveloperProfile DB constraint (JSONB not null, career_goals must be a non-empty list per the Pydantic schema)."
+  ]
+}

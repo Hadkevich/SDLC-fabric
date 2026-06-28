@@ -123,6 +123,24 @@ async def require_manager(current_user: TokenPayload = Depends(get_current_user)
     return current_user
 
 
+async def require_admin(current_user: TokenPayload = Depends(get_current_user)) -> TokenPayload:
+    """Gate for the Admin View / system-override endpoints (Task04 §6)."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+    return current_user
+
+
+async def require_admin_or_manager(
+    current_user: TokenPayload = Depends(get_current_user),
+) -> TokenPayload:
+    """Gate for operations both managers and admins may perform (e.g. allocation overrides)."""
+    if current_user.role not in ("admin", "manager"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Manager or admin role required"
+        )
+    return current_user
+
+
 async def get_optional_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> Optional[TokenPayload]:

@@ -12,7 +12,7 @@
         "Issue JWT access tokens (TTL=1h) and refresh tokens (TTL=7d, HttpOnly cookie) via POST /api/v1/auth/login and POST /api/v1/auth/refresh",
         "Rate-limit inbound requests per user (100 req/min per developer, 200 req/min per manager) to prevent quota exhaustion on the LLM explanation provider API",
         "Validate request payloads against Pydantic models derived from OpenAPI schemas before delegating to service modules",
-        "Mount and coordinate all service modules: profile ingestion, matching engine, explanation, risk, erasure, feedback, analytics, weight config",
+        "Mount and coordinate all service modules: profile ingestion, matching engine, explanation, risk, erasure, feedback, analytics, weight config, data ingestion",
         "Expose GET /api/v1/health endpoint (no auth required) for deployment health-check",
         "Return standardized error envelope: {error_code, message, request_id} on all 4xx and 5xx responses"
       ],
@@ -30,6 +30,7 @@
         "risk-prediction-engine",
         "gdpr-erasure-handler",
         "feedback-analytics-service",
+        "data-ingestion-service",
         "relational-db"
       ]
     },
@@ -44,6 +45,7 @@
         "Validate all required ProjectProfile fields: id, required_skills, team_structure, workload_intensity (float 0.0–1.0), innovation_level (float 0.0–1.0), timezone_overlap_required (string), duration_weeks (int), growth_opportunities (list)",
         "Flag profiles where behavioral vectors (work_style, motivation_vector) are self-reported vs inferred via is_self_reported boolean field",
         "Enqueue embedding generation task to embedding-worker after every profile create or update",
+        "Expose the shared create-plus-embed helper (refactored from create_developer + _enqueue_embeddings) consumed by both POST /api/v1/developers and commit-mode data ingestion so there is a single profile-creation code path with no duplication",
         "Persist and serve WeightConfig via GET/PUT /api/v1/config/weights; validate that |sum(w1..w5) - 1.0| < 0.001 and each wi >= 0.0 before persisting"
       ],
       "interfaces": [
@@ -252,6 +254,7 @@
       "responsibilities": [
         "Render Developer Dashboard: display ranked list of recommended project cards for the authenticated developer; each card shows project name, match_score (formatted as percentage), LLM-generated explanation string, risk tags, and growth potential bullets",
         "Render Manager Dashboard: display team composition health panel with per-developer risk badges (bench_risk, burnout_risk) derived from GET /api/v1/developers/{id}/risk; exclude raw behavioral vectors, work_style arrays, and motivation scalar values from all rendered output",
+        "Render the manager-only Ingestion page (wired into the existing tab pattern, no react-router): a connector picker populated from GET /api/v1/ingestion/connectors with credential-gated connectors disabled and a required-credentials tooltip; a file dropzone for file-kind connectors; GitLab and Jira input forms; a Preview action rendering returned drafts in a review table; and an Approve and Create action re-running in commit mode via a multipart-capable client",
         "Implement JWT auth flow: POST /api/v1/auth/login on form submit, store access_token in memory (not localStorage), store refresh_token in HttpOnly cookie, refresh access token on 401 responses",
         "Call backend REST API endpoints as defined in artifacts/api-contracts.json; handle explanation_source='stub_pending' by displaying a loading indicator and polling GET /api/v1/matches/{match_id}/explanation",
         "Submit match feedback (accept/reject) via POST /api/v1/matches/feedback on developer interaction with recommendation cards",
@@ -267,6 +270,133 @@
       "depends_on": [
         "api-gateway"
       ]
+    },
+    {
+      "id": "data-ingestion-service",
+      "name": "Data Ingestion Service (ETL Orchestrator & Source Connectors)",
+      "type": "service",
+      "responsibilities": [
+        "Expose manager-only ingestion endpoints under /api/v1/ingestion: GET /ingestion/connectors, POST /ingestion/file (multipart), POST /ingestion/gitlab (JSON), POST /ingestion/jira (JSON); reuse the existing require_manager dependency from src/core/auth.py so developer-role JWTs receive HTTP 403 and unauthenticated callers receive HTTP 401",
+        "Coordinate five connector subcomponents — gitlab-connector, hr-connector, slack-connector, cv-connector, jira-connector — each implementing the uniform Connector abstraction that yields SourceDocument records (external_id, display_name, email, cv_text, git_log_text, slack_text, optional timezone/availability_hours/experience_years/source)",
+        "Map each SourceDocument into the three text channels (cv_text, git_log_text, slack_text) consumed by the existing enrich_profile transform, calling enrich_profile off the event loop via asyncio.to_thread",
+        "Support two ingestion modes: preview (returns IngestionSummary with drafts for human review and creates nothing, created=0) and commit (persists DeveloperProfile rows via the shared create-plus-embed helper and enqueues embeddings asynchronously via BackgroundTasks)",
+        "Reuse the single shared create-plus-embed helper refactored from src/api/developers.py so commit-mode ingestion and POST /api/v1/developers share one profile-creation code path with no duplication",
+        "Aggregate per-record outcomes into an IngestionSummary (extracted, enriched, skipped, created, provenance{llm,heuristic}, errors, drafts); skip records that enrich to an empty skills list (counted in skipped) without aborting the batch",
+        "Enforce in-memory-only file handling with a MAX_UPLOAD_BYTES guard (default 10 MB; HTTP 413 on exceed, before any parsing, with nothing written to disk) and a per-batch INGESTION_MAX_RECORDS cap (default 500)",
+        "Guarantee every connector degrades gracefully (never HTTP 5xx) when credentials are absent/invalid or an external service is unreachable; degraded outcomes surface in IngestionSummary.errors with HTTP 200 — see the per-connector failure_modes entries for rate-limit, missing-credentials, and oversized-upload",
+        "Surface connector descriptors (kind: 'file'|'network'; availability: 'live'|'credential-gated') via GET /ingestion/connectors so the frontend can disable credential-gated connectors with a required-credentials tooltip"
+      ],
+      "interfaces": [
+        {
+          "name": "ingestion-rest-http",
+          "type": "http",
+          "ref": "artifacts/api-contracts.json"
+        },
+        {
+          "name": "enrichment-transform",
+          "type": "sdk"
+        }
+      ],
+      "depends_on": [
+        "gitlab-connector",
+        "hr-connector",
+        "slack-connector",
+        "cv-connector",
+        "jira-connector",
+        "profile-ingestion-service",
+        "embedding-worker",
+        "relational-db"
+      ]
+    },
+    {
+      "id": "gitlab-connector",
+      "name": "GitLab Connector",
+      "type": "library",
+      "responsibilities": [
+        "Connector subcomponent of data-ingestion-service; kind=network, availability=live",
+        "Given a username and optional project, pull commit messages and merge-request titles into git_log_text via a thin read-only httpx client (not python-gitlab); honor optional GITLAB_TOKEN, configurable GITLAB_BASE_URL (default https://gitlab.com), a per-request timeout, and a page cap GITLAB_MAX_PAGES (default 10)",
+        "Yield one SourceDocument per requested username; never raise HTTP 5xx",
+        "Degrade gracefully on every documented failure mode — rate-limit, missing-credentials, oversized-upload — returning HTTP 200 with details in IngestionSummary.errors (see the per-connector failure_modes entries for the degradation behavior of each mode)"
+      ],
+      "interfaces": [
+        {
+          "name": "gitlab-rest-outbound",
+          "type": "sdk"
+        }
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "hr-connector",
+      "name": "HR Connector",
+      "type": "library",
+      "responsibilities": [
+        "Connector subcomponent of data-ingestion-service; kind=file, availability=live",
+        "Parse an uploaded CSV or JSON file into one SourceDocument per employee row with case-insensitive, tolerant column mapping (name, email, title/role/bio → cv_text, skills appended, timezone, weekly_hours → availability_hours, years_experience → experience_years)",
+        "Process entirely in memory; never write to disk",
+        "Degrade gracefully on every documented failure mode — rate-limit (not applicable, no network calls), missing-credentials (not applicable, credential-free), oversized-upload (HTTP 413 before parsing) — see the per-connector failure_modes entries for the degradation behavior of each mode"
+      ],
+      "interfaces": [
+        {
+          "name": "file-parse-in-memory",
+          "type": "file"
+        }
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "slack-connector",
+      "name": "Slack Connector",
+      "type": "library",
+      "responsibilities": [
+        "Connector subcomponent of data-ingestion-service; kind=file, availability=live",
+        "Parse an uploaded Slack export JSON, aggregate each user's channel messages into slack_text, and yield one SourceDocument per user found in the export",
+        "Process entirely in memory; never write to disk",
+        "Degrade gracefully on every documented failure mode — rate-limit (not applicable, no network calls), missing-credentials (not applicable, credential-free), oversized-upload (HTTP 413 before parsing) — see the per-connector failure_modes entries for the degradation behavior of each mode"
+      ],
+      "interfaces": [
+        {
+          "name": "file-parse-in-memory",
+          "type": "file"
+        }
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "cv-connector",
+      "name": "CV Connector",
+      "type": "library",
+      "responsibilities": [
+        "Connector subcomponent of data-ingestion-service; kind=file, availability=live",
+        "Parse a single .txt or .md file into one SourceDocument (cv_text); optional .pdf support is guarded by a conditional import and reported as unavailable (rather than raising) when the PDF library is absent",
+        "Process entirely in memory; never write to disk",
+        "Degrade gracefully on every documented failure mode — rate-limit (not applicable, no network calls), missing-credentials (no credentials required; the analogous case is the optional PDF library being unavailable), oversized-upload (HTTP 413 before parsing) — see the per-connector failure_modes entries for the degradation behavior of each mode"
+      ],
+      "interfaces": [
+        {
+          "name": "file-parse-in-memory",
+          "type": "file"
+        }
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "jira-connector",
+      "name": "Jira Connector",
+      "type": "library",
+      "responsibilities": [
+        "Connector subcomponent of data-ingestion-service; kind=network, availability=credential-gated",
+        "Read assigned issues, labels, and comments into git_log_text via a thin read-only httpx client; document the required credentials (base_url, email, token, project_key) and the optional usernames filter",
+        "Yield SourceDocument records for the requested users; never raise HTTP 5xx",
+        "Degrade gracefully on every documented failure mode — rate-limit, missing-credentials, oversized-upload — returning HTTP 200 with details in IngestionSummary.errors (see the per-connector failure_modes entries for the degradation behavior of each mode)"
+      ],
+      "interfaces": [
+        {
+          "name": "jira-rest-outbound",
+          "type": "sdk"
+        }
+      ],
+      "depends_on": []
     }
   ],
   "runtime": {
@@ -325,6 +455,111 @@
     {
       "scenario": "JWT secret rotation or expiry causes all authenticated sessions to be invalidated simultaneously",
       "mitigation": "NEURAL_SYNC_JWT_SECRET is loaded from environment variable at startup. Rotation requires a rolling restart of API replicas. Access token TTL=1h minimizes the window of active tokens. In Phase 1, graceful rotation is acceptable (users must re-login after restart). Phase 2 introduces key-id (kid) claim support for zero-downtime secret rotation using multiple valid secrets."
+    },
+    {
+      "component": "gitlab-connector",
+      "failure_mode": "rate-limit",
+      "scenario": "data-ingestion-service / gitlab-connector: the GitLab API returns HTTP 429, or the configured page cap GITLAB_MAX_PAGES (default 10) is reached mid-pagination while collecting commit messages and merge-request titles.",
+      "mitigation": "Stop paginating immediately, retain the pages already fetched, and record the truncation as a message in IngestionSummary.errors. A per-request httpx timeout bounds each call so a slow upstream cannot stall the batch.",
+      "degradation": "Return a partial IngestionSummary built from the git_log_text collected so far, with a 'rate-limited / page cap reached' note appended to errors; respond HTTP 200 — never HTTP 5xx."
+    },
+    {
+      "component": "gitlab-connector",
+      "failure_mode": "missing-credentials",
+      "scenario": "data-ingestion-service / gitlab-connector: GITLAB_TOKEN (or a request-supplied token) is absent or invalid, so authenticated GitLab reads return 401.",
+      "mitigation": "Treat the connector as live but unauthenticated: attempt only public read calls; on 401 skip the source and record why.",
+      "degradation": "Return a degraded (empty or partial) IngestionSummary with an errors entry naming the required GITLAB_TOKEN; availability stays 'live'; respond HTTP 200 — never HTTP 5xx."
+    },
+    {
+      "component": "gitlab-connector",
+      "failure_mode": "oversized-upload",
+      "scenario": "data-ingestion-service / gitlab-connector: the JSON ingestion request body, or the accumulated git_log_text / result set, exceeds the configured size and record bounds.",
+      "mitigation": "The /api/v1/ingestion/gitlab endpoint enforces MAX_UPLOAD_BYTES on the request body before parsing and caps results at INGESTION_MAX_RECORDS.",
+      "degradation": "Reject request bodies above MAX_UPLOAD_BYTES with HTTP 413 before any work; truncate result sets to INGESTION_MAX_RECORDS and note the truncation in errors; nothing is written to disk."
+    },
+    {
+      "component": "hr-connector",
+      "failure_mode": "rate-limit",
+      "scenario": "data-ingestion-service / hr-connector (file kind): not applicable — the connector parses an uploaded CSV/JSON entirely in memory and makes no outbound network calls, so a third-party rate limit cannot occur.",
+      "mitigation": "No external API is contacted; throughput is bounded only by INGESTION_MAX_RECORDS (default 500).",
+      "degradation": "Not applicable by design; if the batch exceeds INGESTION_MAX_RECORDS the surplus rows are skipped and recorded in IngestionSummary.errors; respond HTTP 200."
+    },
+    {
+      "component": "hr-connector",
+      "failure_mode": "missing-credentials",
+      "scenario": "data-ingestion-service / hr-connector: not applicable — file connectors require no credentials (availability 'live').",
+      "mitigation": "Connector is credential-free; the absence of GitLab/Jira tokens never affects it.",
+      "degradation": "Not applicable by design; the connector always runs offline from the uploaded bytes; respond HTTP 200."
+    },
+    {
+      "component": "hr-connector",
+      "failure_mode": "oversized-upload",
+      "scenario": "data-ingestion-service / hr-connector: the uploaded CSV/JSON file exceeds MAX_UPLOAD_BYTES (default 10 MB).",
+      "mitigation": "The /api/v1/ingestion/file endpoint measures the request body and rejects oversized uploads before any parsing begins.",
+      "degradation": "Return HTTP 413 with the standard error envelope before parsing; nothing is written to disk and no DeveloperProfile is created. Within an accepted file, individual unparseable rows are skipped (counted in IngestionSummary.skipped) without aborting the batch (HTTP 200)."
+    },
+    {
+      "component": "slack-connector",
+      "failure_mode": "rate-limit",
+      "scenario": "data-ingestion-service / slack-connector (file kind): not applicable — the connector parses an uploaded Slack export JSON in memory and makes no outbound network calls.",
+      "mitigation": "No external API is contacted; throughput is bounded only by INGESTION_MAX_RECORDS.",
+      "degradation": "Not applicable by design; surplus users beyond INGESTION_MAX_RECORDS are skipped and recorded in IngestionSummary.errors; respond HTTP 200."
+    },
+    {
+      "component": "slack-connector",
+      "failure_mode": "missing-credentials",
+      "scenario": "data-ingestion-service / slack-connector: not applicable — no credentials are required (availability 'live').",
+      "mitigation": "Credential-free; the connector runs entirely from the uploaded bytes.",
+      "degradation": "Not applicable by design; respond HTTP 200 regardless of credential state."
+    },
+    {
+      "component": "slack-connector",
+      "failure_mode": "oversized-upload",
+      "scenario": "data-ingestion-service / slack-connector: the uploaded Slack export JSON exceeds MAX_UPLOAD_BYTES.",
+      "mitigation": "The /api/v1/ingestion/file endpoint enforces MAX_UPLOAD_BYTES on the request body before parsing.",
+      "degradation": "Return HTTP 413 before parsing; nothing is written to disk. Within an accepted export, users with no extractable messages are skipped (counted in IngestionSummary.skipped) without aborting the batch (HTTP 200)."
+    },
+    {
+      "component": "cv-connector",
+      "failure_mode": "rate-limit",
+      "scenario": "data-ingestion-service / cv-connector (file kind): not applicable — the connector parses a single .txt/.md (optionally .pdf) document in memory and makes no outbound network calls.",
+      "mitigation": "No external API is contacted.",
+      "degradation": "Not applicable by design; respond HTTP 200."
+    },
+    {
+      "component": "cv-connector",
+      "failure_mode": "missing-credentials",
+      "scenario": "data-ingestion-service / cv-connector: no credentials are ever required; the analogous degradation is the optional PDF parser library being unavailable.",
+      "mitigation": "PDF support is guarded by a conditional import; when the library is absent the connector reports itself unavailable for PDF rather than raising, and continues to parse .txt/.md.",
+      "degradation": "When the optional PDF library is absent, report the connector as unavailable for PDF and add an errors entry; .txt/.md parsing continues normally; no credentials are ever required; respond HTTP 200 — never HTTP 5xx."
+    },
+    {
+      "component": "cv-connector",
+      "failure_mode": "oversized-upload",
+      "scenario": "data-ingestion-service / cv-connector: the uploaded CV file exceeds MAX_UPLOAD_BYTES.",
+      "mitigation": "The /api/v1/ingestion/file endpoint enforces MAX_UPLOAD_BYTES on the request body before parsing.",
+      "degradation": "Return HTTP 413 before parsing; nothing is written to disk. An empty or garbled document that yields no skills is skipped (counted in IngestionSummary.skipped) without aborting the batch (HTTP 200)."
+    },
+    {
+      "component": "jira-connector",
+      "failure_mode": "rate-limit",
+      "scenario": "data-ingestion-service / jira-connector: Jira Cloud returns HTTP 429 during issue, label, or comment retrieval.",
+      "mitigation": "Stop further requests, keep the issues already read, and record the throttle in IngestionSummary.errors. A per-request httpx timeout bounds each call.",
+      "degradation": "Return a partial git_log_text built from the issues fetched so far, with a rate-limit note in errors; respond HTTP 200 — never HTTP 5xx."
+    },
+    {
+      "component": "jira-connector",
+      "failure_mode": "missing-credentials",
+      "scenario": "data-ingestion-service / jira-connector (credential-gated): one or more of JIRA_BASE_URL, JIRA_EMAIL, JIRA_TOKEN, or project_key is missing or invalid.",
+      "mitigation": "Detect missing or invalid credentials before any network call; do not raise.",
+      "degradation": "Return an IngestionSummary whose errors list documents exactly which credentials are required (base_url, email, token, project_key), with created=0; availability reported as 'credential-gated'; respond HTTP 200 — never HTTP 5xx."
+    },
+    {
+      "component": "jira-connector",
+      "failure_mode": "oversized-upload",
+      "scenario": "data-ingestion-service / jira-connector: the ingestion request body, or the returned issue volume, exceeds the configured bounds.",
+      "mitigation": "The /api/v1/ingestion/jira endpoint enforces MAX_UPLOAD_BYTES on the request body and INGESTION_MAX_RECORDS on the batch.",
+      "degradation": "Reject oversized request bodies with HTTP 413 before parsing; cap processed issues at INGESTION_MAX_RECORDS and note the truncation in errors; nothing is written to disk."
     }
   ],
   "adrs": [

@@ -15,8 +15,8 @@ import type { RiskBadgeLevel } from '../api/client';
 // ─── Props ─────────────────────────────────────────────────────────────────────
 
 export interface RiskBadgeProps {
-  /** 'burnout' | 'bench' — determines the label text. */
-  type: 'burnout' | 'bench';
+  /** 'burnout' | 'bench' | 'mismatch' — determines the label text. */
+  type: 'burnout' | 'bench' | 'mismatch';
   /** Badge severity level derived from the API's *_risk_badge field. */
   level: RiskBadgeLevel;
   /**
@@ -47,9 +47,10 @@ const BORDER: Record<RiskBadgeLevel, string> = {
   high: '#fca5a5',
 };
 
-const TYPE_LABEL: Record<'burnout' | 'bench', string> = {
+const TYPE_LABEL: Record<'burnout' | 'bench' | 'mismatch', string> = {
   burnout: 'Burnout',
   bench: 'Bench',
+  mismatch: 'Team Fit',
 };
 
 // ─── Component ─────────────────────────────────────────────────────────────────

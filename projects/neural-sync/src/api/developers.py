@@ -22,7 +22,7 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select, delete
+from sqlalchemy import func, select, delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.auth import TokenPayload, get_current_user, require_manager
@@ -46,6 +46,7 @@ from src.engine.matching import (
     compute_growth_score,
     compute_match_score,
 )
+from src.core.helpers import create_developer_profile, _enqueue_embeddings
 
 router = APIRouter(prefix="/developers", tags=["developers"])
 
@@ -159,64 +160,6 @@ def _profile_to_response(dev: DeveloperProfile) -> DeveloperProfileResponse:
     )
 
 
-async def _enqueue_embeddings(dev_id: uuid.UUID, dev_data: dict) -> None:
-    """Generate embeddings and persist them; update embedding_status on the profile."""
-    from src.db.models import DeveloperEmbedding
-    from src.db.session import AsyncSessionLocal
-    from src.engine.embeddings import generate_developer_embeddings
-
-    try:
-        vecs = generate_developer_embeddings(
-            developer_id=str(dev_id),
-            skills=dev_data["skills"],
-            preferred_stack=dev_data["preferred_stack"],
-            experience_years=dev_data["experience_years"],
-            project_history=dev_data["project_history"],
-            work_style_vector=dev_data["work_style_vector"],
-            motivation_vector=dev_data["motivation_vector"],
-            career_goals=dev_data["career_goals"],
-        )
-    except Exception:
-        vecs = None
-
-    async with AsyncSessionLocal() as session:
-        try:
-            profile = await session.get(DeveloperProfile, dev_id)
-            if profile is None:
-                return
-
-            if vecs:
-                for emb_type, vector in vecs.items():
-                    if not vector:
-                        continue
-                    existing = await session.execute(
-                        select(DeveloperEmbedding).where(
-                            DeveloperEmbedding.developer_id == dev_id,
-                            DeveloperEmbedding.embedding_type == emb_type,
-                        )
-                    )
-                    row = existing.scalar_one_or_none()
-                    if row:
-                        row.vector = vector
-                        row.updated_at = datetime.now(timezone.utc)
-                    else:
-                        session.add(
-                            DeveloperEmbedding(
-                                developer_id=dev_id,
-                                embedding_type=emb_type,
-                                vector=vector,
-                                model_name="auto",
-                                model_version="1",
-                            )
-                        )
-                profile.embedding_status = "ready"
-            else:
-                profile.embedding_status = "failed"
-
-            await session.commit()
-        except Exception:
-            await session.rollback()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Routes
@@ -235,33 +178,23 @@ async def create_developer(
     if existing:
         raise HTTPException(status_code=409, detail=f"Developer {dev_id} already exists")
 
-    dev = DeveloperProfile(
-        id=dev_id,
+    # Use the shared create-plus-embed helper (AC16, AC23).
+    # POST /api/v1/developers and commit-mode ingestion share this single code path.
+    dev = await create_developer_profile(
+        db,
+        background_tasks,
+        dev_id=payload.id,
         skills=payload.skills,
         experience_years=payload.experience_years,
         preferred_stack=payload.preferred_stack,
-        work_style_vector=payload.work_style,
+        work_style=payload.work_style,
         motivation_vector=payload.motivation_vector,
-        timezone=payload.timezone,
+        timezone_str=payload.timezone,
         availability_hours=payload.availability_hours,
         career_goals=payload.career_goals,
         project_history=[h.model_dump() for h in payload.project_history],
-        is_behavioral_self_reported=payload.is_self_reported,
-        embedding_status="pending",
+        is_self_reported=payload.is_self_reported,
     )
-    db.add(dev)
-    await db.flush()
-
-    dev_data = {
-        "skills": dev.skills or [],
-        "preferred_stack": dev.preferred_stack or [],
-        "experience_years": dev.experience_years,
-        "project_history": dev.project_history or [],
-        "work_style_vector": dev.work_style_vector or [],
-        "motivation_vector": dev.motivation_vector or [],
-        "career_goals": dev.career_goals or [],
-    }
-    background_tasks.add_task(_enqueue_embeddings, dev.id, dev_data)
     return _profile_to_response(dev)
 
 
@@ -728,6 +661,8 @@ async def get_reallocation_suggestion(
         timezone_score = compute_timezone_score(
             dev_timezone=dev.timezone or "UTC+0",
             project_timezone_overlap=proj.timezone_overlap_required or "UTC+0..UTC+3",
+            availability_hours=dev.availability_hours,
+            workload_intensity=proj.workload_intensity,
         )
         growth_score = compute_growth_score(
             career_goals=dev.career_goals or [],
@@ -806,4 +741,317 @@ async def get_reallocation_suggestion(
             rationale=rationale,
             projected_burnout_after_move=projected_burnout,
         ),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /developers/{id}/recommendations  (WS-B4 — on-demand ANN-backed matching)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RecommendationRequest(BaseModel):
+    """Tuning knobs for on-demand recommendations (all optional)."""
+    top_k: int = Field(10, ge=1, le=50)
+    candidate_pool: int = Field(50, ge=1, le=200)
+    min_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+
+
+@router.post("/{developer_id}/recommendations")
+async def recommend_projects(
+    developer_id: uuid.UUID,
+    payload: Optional[RecommendationRequest] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
+    """Compute fresh recommendations on demand: pgvector ANN pre-selects candidate
+    projects, the deterministic 5-dimension engine scores them, and MatchRecords are
+    upserted (never deleted — that would cascade-drop feedback). Returns the ranked
+    top-K. Falls back to a bounded relational scan with vector_search_degraded=True
+    when ANN is unavailable.
+    """
+    from src.api.matches import _load_weights, _match_record_to_response, DeveloperMatchesResponse
+    from src.engine.retrieval import ann_candidate_projects, VectorSearchDegraded
+    from src.engine.matching import (
+        generate_stub_explanation, generate_risks, generate_growth_potential_list,
+    )
+
+    if current_user.role == "developer" and current_user.developer_profile_id != str(developer_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    dev = await db.get(DeveloperProfile, developer_id)
+    if dev is None:
+        raise HTTPException(status_code=404, detail=f"Developer {developer_id} not found")
+
+    req = payload or RecommendationRequest()
+    weights = await _load_weights(db)
+
+    degraded = False
+    try:
+        candidate_ids = await ann_candidate_projects(db, developer_id, top_n=req.candidate_pool)
+    except VectorSearchDegraded:
+        degraded = True
+        res = await db.execute(select(ProjectProfile.id).limit(req.candidate_pool))
+        candidate_ids = [r[0] for r in res.all()]
+
+    if not candidate_ids:
+        return DeveloperMatchesResponse(developer_id=developer_id, matches=[], total=0)
+
+    proj_rows = (
+        await db.execute(select(ProjectProfile).where(ProjectProfile.id.in_(candidate_ids)))
+    ).scalars().all()
+    existing_rows = (
+        await db.execute(
+            select(MatchRecord).where(
+                MatchRecord.developer_id == developer_id,
+                MatchRecord.project_id.in_(candidate_ids),
+            )
+        )
+    ).scalars().all()
+    existing_by_proj = {m.project_id: m for m in existing_rows}
+
+    weights_snapshot = {
+        "w1": weights.w1_skill, "w2": weights.w2_workstyle, "w3": weights.w3_motivation,
+        "w4": weights.w4_timezone, "w5": weights.w5_growth, "version": weights.version,
+    }
+    behavioral_unavailable = dev.embedding_status != "ready"
+    now = datetime.now(timezone.utc)
+    scored: list[tuple[MatchRecord, str]] = []
+
+    for proj in proj_rows:
+        skill = compute_skill_score(dev.skills or [], proj.required_skills or [], dev.experience_years)
+        ws = compute_workstyle_score(
+            dev.work_style_vector or [0.5] * 8, proj.team_structure or "",
+            proj.workload_intensity, proj.innovation_level,
+        )
+        mot = compute_motivation_score(
+            dev.motivation_vector or [0.5] * 8, proj.innovation_level,
+            proj.growth_opportunities or [], proj.workload_intensity,
+        )
+        tz = compute_timezone_score(
+            dev.timezone or "UTC+0", proj.timezone_overlap_required or "UTC+0 to UTC+3",
+            availability_hours=dev.availability_hours, workload_intensity=proj.workload_intensity,
+        )
+        gr = compute_growth_score(dev.career_goals or [], proj.growth_opportunities or [])
+        ms = compute_match_score(
+            w1=weights.w1_skill, w2=weights.w2_workstyle, w3=weights.w3_motivation,
+            w4=weights.w4_timezone, w5=weights.w5_growth,
+            skill_score=skill, workstyle_score=ws, motivation_score=mot,
+            timezone_score=tz, growth_score=gr,
+        )
+        risks = generate_risks(
+            timezone_score=tz, skill_score=skill, workstyle_score=ws,
+            dev_timezone=dev.timezone or "", project_timezone_overlap=proj.timezone_overlap_required or "",
+            developer_skills=dev.skills or [], project_required_skills=proj.required_skills or [],
+        )
+        growth = generate_growth_potential_list(
+            career_goals=dev.career_goals or [], growth_opportunities=proj.growth_opportunities or [],
+            growth_score=gr,
+        )
+        stub = generate_stub_explanation(
+            skill_score=skill, workstyle_score=ws, motivation_score=mot, growth_score=gr,
+            developer_skills=dev.skills or [], project_required_skills=proj.required_skills or [],
+            developer_career_goals=dev.career_goals or [], project_growth_opportunities=proj.growth_opportunities or [],
+        )
+
+        rec = existing_by_proj.get(proj.id)
+        if rec is not None:
+            # Update in place — never delete (FK cascade would drop feedback records).
+            rec.match_score, rec.skill_score, rec.workstyle_score = ms, skill, ws
+            rec.motivation_score, rec.timezone_score, rec.growth_score = mot, tz, gr
+            rec.risks, rec.growth_potential = risks, growth
+            rec.weights_snapshot = weights_snapshot
+            rec.vector_search_degraded = degraded
+            rec.behavioral_data_unavailable = behavioral_unavailable
+            rec.timestamp = now
+            if rec.explanation_source in ("stub_pending", "stub_permanent"):
+                rec.explanation = stub  # keep any Claude-cached explanation intact
+        else:
+            rec = MatchRecord(
+                id=uuid.uuid4(), developer_id=dev.id, project_id=proj.id,
+                match_score=ms, skill_score=skill, workstyle_score=ws, motivation_score=mot,
+                timezone_score=tz, growth_score=gr, explanation=stub,
+                explanation_source="stub_pending", risks=risks, growth_potential=growth,
+                weights_snapshot=weights_snapshot, vector_search_degraded=degraded,
+                behavioral_data_unavailable=behavioral_unavailable, timestamp=now,
+            )
+            db.add(rec)
+        scored.append((rec, proj.name or "Project"))
+
+    await db.flush()
+
+    scored.sort(key=lambda rp: rp[0].match_score, reverse=True)
+    if req.min_score is not None:
+        scored = [rp for rp in scored if rp[0].match_score >= req.min_score]
+    top = scored[: req.top_k]
+
+    return DeveloperMatchesResponse(
+        developer_id=developer_id,
+        matches=[_match_record_to_response(r, project_name=n) for r, n in top],
+        total=len(scored),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /developers/{id}/similar  (WS-B4 — ANN over the 10k developer set, §1 mobility)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SimilarDeveloperItem(BaseModel):
+    """Peer summary — AC8-safe (no raw work_style / motivation vectors)."""
+    developer_id: uuid.UUID
+    skills: list[str]
+    experience_years: int
+    timezone: str
+
+
+class SimilarDevelopersResponse(BaseModel):
+    developer_id: uuid.UUID
+    similar: list[SimilarDeveloperItem]
+    vector_search_degraded: bool
+
+
+@router.get("/{developer_id}/similar", response_model=SimilarDevelopersResponse)
+async def get_similar_developers(
+    developer_id: uuid.UUID,
+    top_k: int = 10,
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+) -> SimilarDevelopersResponse:
+    """Nearest peers by behavioral embedding (ANN over developer_embeddings) — the
+    genuine 10k-scale ANN path, and the basis for internal-mobility suggestions (§1).
+    Raw behavioral vectors are never returned (AC8)."""
+    from src.engine.retrieval import ann_similar_developers, VectorSearchDegraded
+
+    if current_user.role == "developer" and current_user.developer_profile_id != str(developer_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    dev = await db.get(DeveloperProfile, developer_id)
+    if dev is None:
+        raise HTTPException(status_code=404, detail=f"Developer {developer_id} not found")
+
+    degraded = False
+    try:
+        sim_ids = await ann_similar_developers(db, developer_id, top_n=top_k)
+    except VectorSearchDegraded:
+        degraded, sim_ids = True, []
+
+    if not sim_ids:
+        return SimilarDevelopersResponse(
+            developer_id=developer_id, similar=[], vector_search_degraded=degraded
+        )
+
+    rows = (
+        await db.execute(select(DeveloperProfile).where(DeveloperProfile.id.in_(sim_ids)))
+    ).scalars().all()
+    by_id = {d.id: d for d in rows}
+    similar = [
+        SimilarDeveloperItem(
+            developer_id=i, skills=by_id[i].skills or [],
+            experience_years=by_id[i].experience_years, timezone=by_id[i].timezone,
+        )
+        for i in sim_ids if i in by_id  # preserve ANN distance order
+    ]
+    return SimilarDevelopersResponse(
+        developer_id=developer_id, similar=similar, vector_search_degraded=degraded
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /developers  (WS-B5 — paginated, filterable roster for 10k+ scale)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DeveloperListItem(BaseModel):
+    """Roster row — AC8-safe (no raw work_style / motivation vectors)."""
+    developer_id: uuid.UUID
+    display_name: Optional[str]
+    skills: list[str]
+    experience_years: int
+    timezone: str
+    availability_hours: int
+    embedding_status: str
+    burnout_risk_badge: Optional[str]
+    bench_risk_badge: Optional[str]
+
+
+class DeveloperListResponse(BaseModel):
+    items: list[DeveloperListItem]
+    total: int
+    limit: int
+    offset: int
+    next_offset: Optional[int]
+
+
+@router.get("", response_model=DeveloperListResponse)
+async def list_developers(
+    limit: int = 50,
+    offset: int = 0,
+    skill: Optional[str] = None,
+    timezone: Optional[str] = None,
+    embedding_status: Optional[str] = None,
+    risk_badge: Optional[str] = None,
+    search: Optional[str] = None,
+    sort: str = "display_name",
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+) -> DeveloperListResponse:
+    """Paginated, filterable developer roster (manager/admin). Server-side
+    pagination + indexed filters (skill via JSONB GIN, timezone, embedding_status,
+    cached risk badge, display_name search) keep this O(page) at 10k+ developers.
+    Raw behavioral vectors are never returned (AC8)."""
+    if current_user.role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
+
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+
+    conditions = []
+    if skill:
+        conditions.append(DeveloperProfile.skills.contains([skill]))  # JSONB @> (GIN-indexed)
+    if timezone:
+        conditions.append(DeveloperProfile.timezone == timezone)
+    if embedding_status:
+        conditions.append(DeveloperProfile.embedding_status == embedding_status)
+    if risk_badge:
+        conditions.append(
+            or_(
+                DeveloperProfile.burnout_risk_badge == risk_badge,
+                DeveloperProfile.bench_risk_badge == risk_badge,
+            )
+        )
+    if search:
+        conditions.append(DeveloperProfile.display_name.ilike(f"%{search}%"))
+
+    count_stmt = select(func.count()).select_from(DeveloperProfile)
+    page_stmt = select(DeveloperProfile)
+    if conditions:
+        count_stmt = count_stmt.where(*conditions)
+        page_stmt = page_stmt.where(*conditions)
+
+    total = int((await db.execute(count_stmt)).scalar() or 0)
+
+    sort_col = {
+        "display_name": DeveloperProfile.display_name,
+        "experience_years": DeveloperProfile.experience_years,
+    }.get(sort, DeveloperProfile.display_name)
+    rows = (
+        await db.execute(
+            page_stmt.order_by(sort_col, DeveloperProfile.id).limit(limit).offset(offset)
+        )
+    ).scalars().all()
+
+    items = [
+        DeveloperListItem(
+            developer_id=d.id,
+            display_name=d.display_name,
+            skills=d.skills or [],
+            experience_years=d.experience_years,
+            timezone=d.timezone,
+            availability_hours=d.availability_hours,
+            embedding_status=d.embedding_status,
+            burnout_risk_badge=d.burnout_risk_badge,
+            bench_risk_badge=d.bench_risk_badge,
+        )
+        for d in rows
+    ]
+    next_offset = offset + limit if (offset + limit) < total else None
+    return DeveloperListResponse(
+        items=items, total=total, limit=limit, offset=offset, next_offset=next_offset
     )

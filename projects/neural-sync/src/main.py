@@ -53,6 +53,36 @@ def assert_secret_configured(s: Any) -> None:
             )
 
 
+def assert_embedding_dim_consistent(s: Any) -> None:
+    """Guard against an embedding dimension mismatch reaching a running server.
+
+    The pgvector columns, the active embedding backend, and the configured
+    ``settings.embedding_dim`` must all agree — otherwise every embedding INSERT
+    fails inside a background task and silently flips embedding_status='failed'.
+    Logs CRITICAL on mismatch and refuses to start in non-debug mode.
+
+    Safe to call from tests directly — does NOT depend on FastAPI lifecycle.
+    """
+    from src.db.models import EMBEDDING_DIM
+    from src.engine.embeddings import get_embedding_dim
+
+    backend_dim = get_embedding_dim()
+    if not (backend_dim == s.embedding_dim == EMBEDDING_DIM):
+        logger.critical(
+            "Embedding dimension mismatch: backend=%d, settings.embedding_dim=%d, "
+            "model column=%d. The pgvector columns and the active backend must agree. "
+            "Set EMBEDDING_DIM to match the backend (sentence-transformers=384, "
+            "openai/random=1536) and re-migrate if needed.",
+            backend_dim, s.embedding_dim, EMBEDDING_DIM,
+        )
+        if not s.debug:
+            raise RuntimeError(
+                f"Embedding dimension mismatch (backend={backend_dim}, "
+                f"config={s.embedding_dim}, column={EMBEDDING_DIM}). "
+                "Fix EMBEDDING_DIM / backend before running in non-debug mode."
+            )
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """FastAPI lifespan — runs startup/shutdown logic.
@@ -61,7 +91,16 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     lifespan, so existing tests remain unaffected.
     """
     assert_secret_configured(settings)
-    yield
+    assert_embedding_dim_consistent(settings)
+    # Optional continuous re-optimization loop (Task04 §4); no-op unless
+    # NEURAL_SYNC_REOPT_INTERVAL>0. Imported here so tests that never enter the
+    # lifespan don't require apscheduler.
+    from src.services.scheduler import start_scheduler, shutdown_scheduler
+    start_scheduler()
+    try:
+        yield
+    finally:
+        shutdown_scheduler()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -153,6 +192,8 @@ async def health(verbose: bool = False) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 from src.api import auth, matches, developers, projects, config, feedback, analytics  # noqa: E402
+from src.api import ingestion  # noqa: E402
+from src.api import admin  # noqa: E402
 
 PREFIX = "/api/v1"
 
@@ -163,3 +204,5 @@ app.include_router(projects.router, prefix=PREFIX)
 app.include_router(config.router, prefix=PREFIX)
 app.include_router(feedback.router, prefix=PREFIX)
 app.include_router(analytics.router, prefix=PREFIX)
+app.include_router(ingestion.router, prefix=PREFIX)  # data ingestion (T-11)
+app.include_router(admin.router, prefix=PREFIX)      # admin allocation overrides (WS-E2)

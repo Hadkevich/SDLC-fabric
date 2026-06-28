@@ -1,0 +1,45 @@
+# GCP Cloud Run service for NEURAL SYNC (Task04 §7 Infra: GCP).
+# Deploy:  gcloud run services replace deploy/cloudrun/service.yaml --region=europe-west1
+# Image is the repo Dockerfile (multi-stage: React build + FastAPI + nginx single-origin on $PORT).
+# Backing store: Cloud SQL for PostgreSQL with the `vector` extension enabled
+#   (CREATE EXTENSION IF NOT EXISTS vector;) — same pgvector contract as local Docker.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: neural-sync
+  annotations:
+    run.googleapis.com/launch-stage: BETA
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "10"          # horizontal scale for 10k+ load
+        run.googleapis.com/cloudsql-instances: PROJECT:REGION:neural-sync-pg
+    spec:
+      containerConcurrency: 80
+      containers:
+        - image: REGION-docker.pkg.dev/PROJECT/neural-sync/neural-sync:latest
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          env:
+            - name: DEBUG
+              value: "false"
+            # Secrets come from Secret Manager (do NOT inline real values).
+            - name: NEURAL_SYNC_JWT_SECRET
+              valueFrom:
+                secretKeyRef: { name: neural-sync-jwt-secret, key: latest }
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: neural-sync-database-url, key: latest }
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef: { name: neural-sync-gemini-key, key: latest }
+            - name: ALLOWED_ORIGINS
+              value: "https://neural-sync.example.com"
+            - name: EMBEDDING_DIM
+              value: "1536"

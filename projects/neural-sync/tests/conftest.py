@@ -46,6 +46,16 @@ def mgr_auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+ADMIN_USER_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+
+def admin_auth_headers() -> dict[str, str]:
+    """Returns Authorization header for an admin role user (Admin View: weight tuning,
+    system overrides, ingestion, re-optimization)."""
+    token = create_access_token(ADMIN_USER_ID, "admin", None)
+    return {"Authorization": f"Bearer {token}"}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Mock DB result objects
 # ─────────────────────────────────────────────────────────────────────────────

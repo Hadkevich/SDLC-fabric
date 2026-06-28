@@ -160,46 +160,67 @@ All routes are under the **`/api/v1`** prefix. Auth: Bearer JWT access token unl
 | POST | `/matches` | required | compute a match → **201**; returns score + stub explanation immediately |
 | GET | `/matches/{match_id}` | required | fetch a stored match record |
 | GET | `/matches/{match_id}/explanation` | required | poll for the async LLM explanation (`explanation_source`) |
-| POST | `/matches/rescore` | Manager | queue async batch re-scoring → **202** |
+| POST | `/matches/rescore` | **Admin** | re-score all matches vs current weights → **202** (real) |
 
 ### Feedback / admin / risk — `src/api/feedback.py`
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
 | POST | `/matches/feedback` | required | record accept/reject → **201** (one per match) |
-| GET | `/admin/erasure-audit/{developer_id}` | Manager | GDPR erasure compliance log |
-| POST | `/admin/reembed` | Manager | trigger full re-embedding → **202** |
-| POST | `/risk/refresh` | Manager | batch refresh all risk scores → **202** |
-| GET | `/teams/{team_id}/risk-summary` | Manager | per-developer burnout/bench risk badges (AC8); BLK-001 resolved |
+| GET | `/admin/erasure-audit/{developer_id}` | **Admin** | GDPR erasure compliance log |
+| POST | `/admin/reembed` | **Admin** | regenerate all embeddings → **202** (real) |
+| POST | `/risk/refresh` | **Admin** | recompute + cache all risk scores → **202** (real) |
+| GET | `/teams/{team_id}/risk-summary` | Manager/Admin | per-developer burnout/bench/team-fit badges (AC8), `limit`/`offset` |
 
 ### Developers — `src/api/developers.py`
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
+| GET | `/developers` | Manager/Admin | **paginated roster** (`limit`/`offset`, filters: `skill`/`timezone`/`embedding_status`/`risk_badge`, `search`) |
 | POST | `/developers` | required | create profile (background embedding job) |
 | GET | `/developers/{id}` | required | fetch profile (raw behavioral vectors never returned) |
 | PUT | `/developers/{id}` | required | replace profile (marks `embedding_status=pending`) |
 | DELETE | `/developers/{id}` | required | **GDPR cascade erasure** across 6 entity classes + audit row |
-| GET | `/developers/{id}/risk` | required | burnout + bench risk scores & badges |
-| GET | `/developers/{id}/matches` | required | top-K recommendations (optional `min_score`) |
+| GET | `/developers/{id}/risk` | required | burnout + bench + team-mismatch risk scores & badges |
+| GET | `/developers/{id}/matches` | required | top-K stored matches (optional `min_score`) |
+| POST | `/developers/{id}/recommendations` | required | **on-demand ANN recommendations** — pgvector candidates → score → upsert → ranked |
+| GET | `/developers/{id}/similar` | required | **ANN nearest peers** over the embedding set (internal mobility); AC8-safe |
+| POST | `/developers/enrich` | required | raw CV/Git/Slack text → structured profile draft |
+| GET | `/developers/{id}/reallocation-suggestion` | required | allocation **suggestion** (ANN bridge project) |
 
 ### Projects — `src/api/projects.py`
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
-| POST | `/projects` | Manager | create project (background embedding) |
+| POST | `/projects` | Manager/Admin | create project (background embedding) |
 | GET | `/projects/{id}` | required | fetch project |
-| PUT | `/projects/{id}` | Manager | replace project |
-| DELETE | `/projects/{id}` | Manager | delete project |
+| PUT | `/projects/{id}` | Manager/Admin | replace project |
+| DELETE | `/projects/{id}` | Manager/Admin | delete project |
+
+### Data ingestion — `src/api/ingestion.py`  (Task04 §5)
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| GET | `/ingestion/connectors` | Manager/Admin | list connectors (live vs credential-gated) |
+| POST | `/ingestion/file` | Manager/Admin | upload HR CSV/JSON · Slack export · CV (preview/commit); 413 on oversize |
+| POST | `/ingestion/gitlab` | Manager/Admin | **live** GitLab commits/MRs → draft profiles |
+| POST | `/ingestion/jira` | Manager/Admin | credential-gated Jira issues → draft profiles |
+
+### Admin — `src/api/admin.py`  (Task04 §6 system overrides)
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| POST | `/admin/allocations` | **Admin** | assign/move a developer onto a project (override) |
+| PUT | `/admin/allocations/{id}` | **Admin** | edit an allocation (project/dates/intensity/active) |
+| DELETE | `/admin/allocations/{id}` | **Admin** | remove an allocation |
+| GET | `/admin/developers/{id}/allocations` | **Admin** | a developer's allocations |
 
 ### Config (weights) — `src/api/config.py`
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
 | GET | `/config/weights` | required | active weight configuration |
-| PUT | `/config/weights` | Manager | update weights (sum must equal 1.0 ± 0.001) |
+| PUT | `/config/weights` | **Admin** | tune weights (sum 1.0 ± 0.001) — Admin View (§6) |
 
 ### Analytics — `src/api/analytics.py`
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
 | GET | `/analytics/rejection-rate` | required | developer rejection ratio (null below `REJECTION_RATE_MIN_SAMPLES`) |
-| GET | `/analytics/team-rejection-rate` | Manager | team-level rejection aggregation |
+| GET | `/analytics/team-rejection-rate` | Manager/Admin | team-level rejection aggregation |
 | GET | `/analytics/match-stats` | required | total / accepted / rejected counts |
 
 ---
@@ -211,13 +232,18 @@ All routes are under the **`/api/v1`** prefix. Auth: Bearer JWT access token unl
 ([`frontend/src/api/client.ts`](frontend/src/api/client.ts) — in-memory access token,
 HttpOnly refresh cookie, one silent refresh on 401).
 
-| Page / role | File | Shows |
-|-------------|------|-------|
-| **Developer** | `pages/DeveloperDashboard.tsx` | recommended projects, match explanations, risks, growth paths; Accept/Reject |
-| **Manager** | `pages/ManagerDashboard.tsx` | team health, per-developer **risk badges** (no raw behavioral vectors) — backed by `/teams/{id}/risk-summary` (BLK-001 resolved) |
-| **Admin / weights** | `pages/WeightConfigPage.tsx` | weight tuning via `/config/weights` — live as the **Weight Config** tab in the Manager view (`App.tsx`) |
+Three roles match the Task04 §6 view split. Logins (demo): `user1`/`123` (developer),
+`manager`/`123` (manager), `admin`/`123` (admin).
 
-Components: `ProjectCard.tsx` (polls explanation until ready), `RiskBadge.tsx`.
+| View / role | Files | Shows |
+|-------------|------|-------|
+| **Developer View** | `pages/DeveloperDashboard.tsx` | recommended projects, match explanations, risks, growth paths; Accept/Reject |
+| **Manager View** | `pages/ManagerDashboard.tsx`, `pages/RosterPage.tsx` | team composition health + **risk/bench/team-fit badges**, allocation **suggestions** (reallocation modal), **Roster** (paginated/filterable for 10k); team analytics |
+| **Admin View** | `pages/WeightConfigPage.tsx`, `pages/IngestionPage.tsx` | **weight tuning** + **system overrides** + data ingestion. Admin is a superset of manager; the Weight Config tab renders for `admin` only |
+
+Admin-exclusive endpoints (weight tuning, `/admin/allocations`, re-optimization, erasure-audit)
+return 403 for managers. Components: `ProjectCard.tsx` (polls explanation), `RiskBadge.tsx`
+(burnout/bench/team-fit), `Pagination`/`FilterBar`/`ConnectorPicker`/`DraftReviewTable`.
 
 ---
 

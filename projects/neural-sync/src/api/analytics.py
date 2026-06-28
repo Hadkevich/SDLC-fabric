@@ -139,9 +139,9 @@ async def get_team_rejection_rate(
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> TeamRejectionRateResponse:
-    """Team-level rejection rate aggregation. Manager role required."""
-    if current_user.role != "manager":
-        raise HTTPException(status_code=403, detail="Manager role required")
+    """Team-level rejection rate aggregation. Manager or admin role required."""
+    if current_user.role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
 
     # Get all developers with feedback records (team scoping simplified for Phase 1)
     result = await db.execute(

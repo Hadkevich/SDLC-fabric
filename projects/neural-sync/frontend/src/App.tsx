@@ -19,11 +19,13 @@ import type { CSSProperties, FormEvent } from 'react';
 import type { LoginResponse } from './api/client';
 import { login, logout, setAccessToken } from './api/client';
 import { DeveloperDashboard } from './pages/DeveloperDashboard';
+import { IngestionPage } from './pages/IngestionPage';
 import { ManagerDashboard } from './pages/ManagerDashboard';
+import { RosterPage } from './pages/RosterPage';
 import { WeightConfigPage } from './pages/WeightConfigPage';
 import { ProfilePage } from './pages/ProfilePage';
 
-type ManagerTab = 'risk' | 'weights' | 'profile';
+type ManagerTab = 'risk' | 'roster' | 'weights' | 'profile' | 'ingestion';
 type DeveloperTab = 'recommendations' | 'profile';
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
@@ -271,14 +273,30 @@ export default function App() {
           <button onClick={() => setManagerTab('risk')} style={tabBtnStyle(managerTab === 'risk')}>
             Team Risk
           </button>
-          <button onClick={() => setManagerTab('weights')} style={tabBtnStyle(managerTab === 'weights')}>
-            Weight Config
+          <button
+            data-testid="roster-tab-button"
+            onClick={() => setManagerTab('roster')}
+            style={tabBtnStyle(managerTab === 'roster')}
+          >
+            Roster
+          </button>
+          {session.role === 'admin' && (
+            <button onClick={() => setManagerTab('weights')} style={tabBtnStyle(managerTab === 'weights')}>
+              Weight Config
+            </button>
+          )}
+          <button
+            data-testid="ingestion-tab-button"
+            onClick={() => setManagerTab('ingestion')}
+            style={tabBtnStyle(managerTab === 'ingestion')}
+          >
+            Ingestion
           </button>
           <button onClick={() => setManagerTab('profile')} style={tabBtnStyle(managerTab === 'profile')}>
             My Profile
           </button>
           <span style={{ color: '#93c5fd', fontSize: '0.8rem', fontWeight: 600, marginLeft: '8px' }}>
-            ⚙ Manager
+            {session.role === 'admin' ? '🛡 Admin' : '⚙ Manager'}
           </span>
           <button
             onClick={() => void handleLogout()}
@@ -299,7 +317,9 @@ export default function App() {
       </nav>
 
       {managerTab === 'risk' && <ManagerDashboard teamId={teamId} />}
-      {managerTab === 'weights' && <WeightConfigPage />}
+      {managerTab === 'roster' && <RosterPage />}
+      {managerTab === 'weights' && session.role === 'admin' && <WeightConfigPage />}
+      {managerTab === 'ingestion' && <IngestionPage />}
       {managerTab === 'profile' && <ProfilePage role="manager" userId={session.user_id} />}
     </div>
   );

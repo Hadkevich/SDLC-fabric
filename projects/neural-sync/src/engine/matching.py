@@ -353,24 +353,53 @@ def _parse_project_timezone_range(timezone_overlap: str) -> tuple[float, float]:
     return -12.0, 12.0
 
 
-def compute_timezone_score(dev_timezone: str, project_timezone_overlap: str) -> float:
-    """
-    Compute timezone compatibility score in [0.0, 1.0].
+def _availability_fit(availability_hours: int, workload_intensity: float) -> float:
+    """How well a developer's weekly availability covers a project's expected load.
 
-    Score = 1.0 when developer timezone is within the project's required overlap window.
-    Score decreases as the timezone distance from the window increases.
+    Expected hours scale with workload_intensity: a 0.0-intensity project expects
+    ~20h, a 1.0-intensity project expects a full ~40h week. Returns 1.0 when the
+    developer meets or exceeds the expectation, decaying to a 0.5 floor otherwise
+    (a soft signal — under-availability dampens but never zeroes the dimension).
+    """
+    expected = 20.0 + 20.0 * max(0.0, min(1.0, workload_intensity))
+    if availability_hours >= expected:
+        return 1.0
+    return max(0.5, availability_hours / expected)
+
+
+def compute_timezone_score(
+    dev_timezone: str,
+    project_timezone_overlap: str,
+    availability_hours: Optional[int] = None,
+    workload_intensity: Optional[float] = None,
+) -> float:
+    """
+    Compute the w4 "availability & timezone" compatibility score in [0.0, 1.0].
+
+    Base score = 1.0 when developer timezone is within the project's required overlap
+    window, decreasing with hour-distance otherwise (Task04 §1 "time zone").
+
+    When BOTH ``availability_hours`` and ``workload_intensity`` are supplied, the base
+    score is modulated by an availability-fit factor (Task04 §1 "availability"):
+    insufficient weekly availability for a high-workload project softly reduces the
+    dimension (up to 30%). Both default to None → neutral (base score unchanged), so
+    the deterministic timezone unit tests are unaffected.
     """
     dev_offset = _get_utc_offset(dev_timezone)
     proj_min, proj_max = _parse_project_timezone_range(project_timezone_overlap)
 
     if proj_min <= dev_offset <= proj_max:
-        return 1.0
+        base_score = 1.0
+    else:
+        # Distance from the nearest edge of the range; score drops to 0 at 12 hours.
+        distance = min(abs(dev_offset - proj_min), abs(dev_offset - proj_max))
+        base_score = max(0.0, 1.0 - distance / 12.0)
 
-    # Distance from the nearest edge of the range
-    distance = min(abs(dev_offset - proj_min), abs(dev_offset - proj_max))
-    # Score drops to 0 at 12 hours distance
-    score = max(0.0, 1.0 - distance / 12.0)
-    return round(score, 6)
+    if availability_hours is None or workload_intensity is None:
+        return round(base_score, 6)
+
+    fit = _availability_fit(availability_hours, workload_intensity)
+    return round(base_score * (0.7 + 0.3 * fit), 6)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

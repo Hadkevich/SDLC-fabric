@@ -234,6 +234,17 @@ function MemberRow({ member }: MemberRowProps) {
           />
         </td>
         <td style={tdStyle}>
+          {member.team_mismatch_badge != null ? (
+            <RiskBadge
+              type="mismatch"
+              level={member.team_mismatch_badge}
+              score={member.team_mismatch_probability ?? undefined}
+            />
+          ) : (
+            <span style={{ fontSize: '0.72rem', color: '#9ca3af' }}>—</span>
+          )}
+        </td>
+        <td style={tdStyle}>
           {isHighRisk && (
             <button
               onClick={() => void handleSuggestMove()}
@@ -460,6 +471,7 @@ export function ManagerDashboard({ teamId }: ManagerDashboardProps) {
                   <th style={thStyle}>Developer</th>
                   <th style={thStyle}>Burnout Risk</th>
                   <th style={thStyle}>Bench Risk</th>
+                  <th style={thStyle}>Team Fit</th>
                   <th style={thStyle}>Action</th>
                 </tr>
               </thead>
