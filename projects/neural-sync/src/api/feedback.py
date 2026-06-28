@@ -262,6 +262,8 @@ _TEAM_DISPLAY_NAMES = [
 @router.get("/teams/{team_id}/risk-summary", response_model=TeamRiskSummary)
 async def get_team_risk_summary(
     team_id: uuid.UUID,
+    limit: Optional[int] = None,
+    offset: int = 0,
     db: AsyncSession = Depends(get_db),
     current_user: TokenPayload = Depends(get_current_user),
 ) -> TeamRiskSummary:
@@ -360,9 +362,16 @@ async def get_team_risk_summary(
         else:
             dist.bench_low_count += 1
 
+    # Optional pagination of the member roster (member_count and the distribution
+    # remain whole-team accurate; only the returned members list is windowed).
+    total_members = len(members)
+    if limit is not None:
+        start = max(0, offset)
+        members = members[start : start + max(1, limit)]
+
     return TeamRiskSummary(
         team_id=team_id,
-        member_count=len(members),
+        member_count=total_members,
         members=members,
         risk_distribution=dist,
         computed_at=datetime.now(timezone.utc),

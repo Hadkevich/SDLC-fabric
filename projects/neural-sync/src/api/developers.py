@@ -22,7 +22,7 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select, delete
+from sqlalchemy import func, select, delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.auth import TokenPayload, get_current_user, require_manager
@@ -951,4 +951,107 @@ async def get_similar_developers(
     ]
     return SimilarDevelopersResponse(
         developer_id=developer_id, similar=similar, vector_search_degraded=degraded
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /developers  (WS-B5 — paginated, filterable roster for 10k+ scale)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DeveloperListItem(BaseModel):
+    """Roster row — AC8-safe (no raw work_style / motivation vectors)."""
+    developer_id: uuid.UUID
+    display_name: Optional[str]
+    skills: list[str]
+    experience_years: int
+    timezone: str
+    availability_hours: int
+    embedding_status: str
+    burnout_risk_badge: Optional[str]
+    bench_risk_badge: Optional[str]
+
+
+class DeveloperListResponse(BaseModel):
+    items: list[DeveloperListItem]
+    total: int
+    limit: int
+    offset: int
+    next_offset: Optional[int]
+
+
+@router.get("", response_model=DeveloperListResponse)
+async def list_developers(
+    limit: int = 50,
+    offset: int = 0,
+    skill: Optional[str] = None,
+    timezone: Optional[str] = None,
+    embedding_status: Optional[str] = None,
+    risk_badge: Optional[str] = None,
+    search: Optional[str] = None,
+    sort: str = "display_name",
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+) -> DeveloperListResponse:
+    """Paginated, filterable developer roster (manager/admin). Server-side
+    pagination + indexed filters (skill via JSONB GIN, timezone, embedding_status,
+    cached risk badge, display_name search) keep this O(page) at 10k+ developers.
+    Raw behavioral vectors are never returned (AC8)."""
+    if current_user.role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
+
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+
+    conditions = []
+    if skill:
+        conditions.append(DeveloperProfile.skills.contains([skill]))  # JSONB @> (GIN-indexed)
+    if timezone:
+        conditions.append(DeveloperProfile.timezone == timezone)
+    if embedding_status:
+        conditions.append(DeveloperProfile.embedding_status == embedding_status)
+    if risk_badge:
+        conditions.append(
+            or_(
+                DeveloperProfile.burnout_risk_badge == risk_badge,
+                DeveloperProfile.bench_risk_badge == risk_badge,
+            )
+        )
+    if search:
+        conditions.append(DeveloperProfile.display_name.ilike(f"%{search}%"))
+
+    count_stmt = select(func.count()).select_from(DeveloperProfile)
+    page_stmt = select(DeveloperProfile)
+    if conditions:
+        count_stmt = count_stmt.where(*conditions)
+        page_stmt = page_stmt.where(*conditions)
+
+    total = int((await db.execute(count_stmt)).scalar() or 0)
+
+    sort_col = {
+        "display_name": DeveloperProfile.display_name,
+        "experience_years": DeveloperProfile.experience_years,
+    }.get(sort, DeveloperProfile.display_name)
+    rows = (
+        await db.execute(
+            page_stmt.order_by(sort_col, DeveloperProfile.id).limit(limit).offset(offset)
+        )
+    ).scalars().all()
+
+    items = [
+        DeveloperListItem(
+            developer_id=d.id,
+            display_name=d.display_name,
+            skills=d.skills or [],
+            experience_years=d.experience_years,
+            timezone=d.timezone,
+            availability_hours=d.availability_hours,
+            embedding_status=d.embedding_status,
+            burnout_risk_badge=d.burnout_risk_badge,
+            bench_risk_badge=d.bench_risk_badge,
+        )
+        for d in rows
+    ]
+    next_offset = offset + limit if (offset + limit) < total else None
+    return DeveloperListResponse(
+        items=items, total=total, limit=limit, offset=offset, next_offset=next_offset
     )
