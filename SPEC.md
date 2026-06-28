@@ -286,6 +286,26 @@ load state → pick next runnable task(s) from the DAG
            → atomically persist state → loop
 ```
 
+### 8.7 Brownfield extension — `--feature` (incremental, non-destructive)
+The factory extends an already-**complete** project, not only greenfield builds. `--feature
+"<request>"` (engine `extend_with_feature`) re-opens **only** the two prelude tasks
+(`STAGE-REQUIREMENTS`, `STAGE-PLAN`): the product agent *amends* `requirements.json` and the
+planner emits an **additive** workplan. Every existing DAG task stays `success` and is skipped by
+the scheduler, so previously generated code is never re-run or deleted.
+
+Guarantees:
+- **Additive plan.** The planner preserves completed `task_id`s verbatim and issues fresh ids for
+  new work; new `reviewer`/`qa`/`devops`/`e2e` tasks depend **only** on the new developer task(s)
+  — never an existing one (a rejected review resets+unlinks its developer ancestors, so this bounds
+  the blast radius to new files).
+- **Merge, not regenerate.** The developer agent Reads+Edits an existing output path in place and
+  preserves unrelated content; the architect extends existing contracts rather than rewriting them.
+- **Non-destructive.** No `_reseed_artifacts` / DAG wipe (that is Level-2 monitoring-feedback only).
+  Guarded to a terminal `complete` state; idempotent on re-run.
+
+This is distinct from the §3.9 monitoring-feedback re-plan, which *rebuilds* the DAG to remediate
+an unhealthy deploy. `--feature` is for adding capability to a healthy, finished project.
+
 ## 9. Governance
 - No secrets in prompts or logs.
 - No deployment without passing QA (`summary.failed == 0`).

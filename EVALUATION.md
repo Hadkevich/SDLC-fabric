@@ -184,3 +184,41 @@ not a missing capability.
 
 *Cross-references:* `REQUIREMENTS-TRACEABILITY.md` (per-item status),
 `ARCHITECTURE-DIAGRAM.md` (engine + gates), `projects/neural-sync/README.md` (the demo app).
+
+---
+
+## 8. Post-audit compliance pass — `feat/task04-compliance` branch
+
+After the run above, a Task-04 re-audit found real gaps; a compliance pass closed them — hardening
+both the demo app **and** the factory. Full file-level status:
+`projects/neural-sync/docs/TASK04-COMPLIANCE.md`.
+
+**What was added (test suite 108 → 243 green):**
+- **pgvector ANN made load-bearing** — previously decorative (no ANN query existed). Now
+  `engine/retrieval.py` powers `POST /developers/{id}/recommendations` + `/similar`; the
+  deterministic scorer is untouched, so the matching ACs still hold. Verified live against pgvector.
+- **Real re-optimization** — `rescore`/`reembed`/`risk-refresh` were stubs returning a fake job_id;
+  now real (`services/reoptimization.py`) + an opt-in APScheduler loop. Closes the §10 "static
+  allocation" failure condition.
+- **Data ingestion (§5)** — `src/connectors/` (live GitLab + HR/Slack/CV file + Jira adapter) feeding
+  the existing enrichment+embedding path; `/ingestion/*` endpoints + UI.
+- **Roles aligned to §6** — real `admin` role (migration 003); weight tuning + system-override
+  allocations are Admin-only (were manager-only / missing); paginated 10k roster + roster UI.
+- **Scale proven, not claimed** — `scripts/seed_scale.py` + k6 harness; **measured** p95 at 10,050
+  developers: roster 39ms, ANN /similar 321ms (all < 500ms) —
+  `projects/neural-sync/artifacts/perf/load_test_report.md`.
+
+**Factory upgrade — safe brownfield extension.** The most reusable outcome: the engine gained a
+non-destructive `--feature` mode (`SPEC.md` §8.7). The ingestion subsystem (WS-D) was built **by the
+factory** as an incremental feature on the already-complete project — additive workplan, existing
+code untouched, review approved, QA green. The factory proving it can *evolve* a live codebase, not
+only scaffold a new one.
+
+**Honest limitations (carried + new):**
+- The WS-D pipeline's **deploy + e2e were sandbox-limited** (agent `docker build` blocked; Playwright
+  MCP not granted) — verified instead by 106 backend/integration tests + live in the dev container
+  (`/api/v1/ingestion/*` respond); a real deploy + browser e2e must be re-run in a Docker+Playwright
+  environment. The regenerated multi-stage `Dockerfile` is **unbuilt/unverified**.
+- Deliberate deviations stand: **Gemini** (not Claude) for the app LLM; **pgvector** (not
+  Pinecone/Weaviate); Slack/Jira/HR are file-import + credential-gated adapters (live OAuth is roadmap).
+- The branch is **not merged to `main`**.

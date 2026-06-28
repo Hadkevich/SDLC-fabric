@@ -12,6 +12,20 @@
 
 ---
 
+> **⚠️ Update (branch `feat/task04-compliance`).** A post-audit compliance pass closed most of
+> the Task-04 gaps below. The authoritative, file-level §1–§12 status now lives in
+> **[`projects/neural-sync/docs/TASK04-COMPLIANCE.md`](projects/neural-sync/docs/TASK04-COMPLIANCE.md)** —
+> read it alongside this table. Highlights since the last grading: pgvector ANN is now on the
+> critical path (recommendations + `/similar`); re-optimization is real (rescore/reembed/risk-refresh
+> + opt-in scheduler), not stubbed; data-ingestion connectors (live GitLab + HR/Slack/CV/Jira) exist;
+> a real `admin` role + system-override allocations + a paginated 10k roster were added; **measured**
+> p95 < 500ms at 10,050 developers (`projects/neural-sync/artifacts/perf/load_test_report.md`). The
+> factory itself gained a safe **brownfield `--feature`** mode (see `SPEC.md` §8.7). Deliberate
+> deviations (Gemini not Claude; pgvector not Pinecone/Weaviate; sandbox-limited deploy/e2e) are
+> documented, not hidden.
+
+---
+
 ## Part A — Agentic SDLC & Software Factory (the hackathon task)
 
 ### Phase 1 — Define the Agentic SDLC (the spec)
