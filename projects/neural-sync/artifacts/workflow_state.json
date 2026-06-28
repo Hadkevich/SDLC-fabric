@@ -94,8 +94,8 @@
       "status": "success",
       "attempt": 0,
       "agent": "e2e-agent",
-      "started_at": "2026-06-28T03:54:35Z",
-      "completed_at": "2026-06-28T04:00:22Z",
+      "started_at": "2026-06-28T06:31:46Z",
+      "completed_at": "2026-06-28T06:55:52Z",
       "artifact_refs": [
         "artifacts/e2e_report.json"
       ]
@@ -410,8 +410,8 @@
       "depends_on": [
         "T-15-DEPLOY-INGESTION"
       ],
-      "started_at": "2026-06-28T03:54:35Z",
-      "completed_at": "2026-06-28T04:00:22Z",
+      "started_at": "2026-06-28T06:31:46Z",
+      "completed_at": "2026-06-28T06:55:52Z",
       "artifact_refs": [
         "artifacts/e2e_report.json"
       ]
@@ -420,7 +420,7 @@
   "halted": false,
   "max_retries": 3,
   "created_at": "2026-06-26T18:12:19Z",
-  "updated_at": "2026-06-28T04:00:22Z",
+  "updated_at": "2026-06-28T06:55:52Z",
   "max_feedback_cycles": 0,
   "feedback_cycle": 0,
   "health_rework": 0,

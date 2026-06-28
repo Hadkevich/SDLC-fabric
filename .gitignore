@@ -20,3 +20,7 @@ projects/*/artifacts/agent-trace/
 
 # Personal Claude Code settings (machine-specific) — never commit:
 .claude/settings.local.json
+
+# Playwright MCP browser profile (e2e runtime)
+projects/*/.playwright-mcp/
+.playwright-mcp/

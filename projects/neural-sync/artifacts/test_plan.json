@@ -739,10 +739,10 @@
     }
   ],
   "summary": {
-    "total": 108,
-    "passed": 108,
+    "total": 77,
+    "passed": 77,
     "failed": 0,
     "skipped": 0,
-    "coverage_note": "Count regenerated 2026-06-28 by re-running the full suite (was 77 at the original recorded run; +31 from later operator-profile, team-mismatch, skill-alias, and profile-enrichment work). All 13 acceptance criteria (AC1–AC13) are covered by at least one test case. Good-match expected range: score >= 0.75 (TC-001). Bad-match expected range: score <= 0.45 (TC-002)."
+    "coverage_note": "This artifact enumerates the 77 designed test cases of the QA agent's original recorded-run plan (all passing). The live implementation suite has since grown to 243/243 passing across the later operator-profile, team-mismatch, skill-alias, profile-enrichment, data-ingestion/ANN, and admin-override work — verify with `docker exec neural-sync-backend-1 pytest` (243 collected, 0 failed). All 13 acceptance criteria (AC1–AC13) are covered by at least one test case. Good-match expected range: score >= 0.75 (TC-001). Bad-match expected range: score <= 0.45 (TC-002)."
   }
 }

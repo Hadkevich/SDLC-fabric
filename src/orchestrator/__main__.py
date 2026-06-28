@@ -91,6 +91,15 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="fold the project's events.log.jsonl into a per-agent-role "
                         "cost/efficiency report (artifacts/cost_report.{json,md}) and "
                         "exit — no agent is invoked (no LLM/cost)")
+    p.add_argument("--git-flow", action="store_true",
+                   help="after a healthy run, ship the project via a real agent-driven "
+                        "PR: branch → commit → push → open PR → post the reviewer agent's "
+                        "verdict as a review comment → squash-merge (needs `gh auth`; "
+                        "no-op if unauthenticated). Writes artifacts/scm_report.json")
+    p.add_argument("--git-flow-base",
+                   help="base branch for --git-flow (default: current branch)")
+    p.add_argument("--git-flow-no-merge", action="store_true",
+                   help="with --git-flow, open the PR + post the review but do not merge")
     return p
 
 
@@ -151,6 +160,17 @@ def _print_summary(state: dict, project: Path) -> None:
             print(f"     python -m orchestrator {rel} --yes")
 
 
+def _print_scm(report: dict, project: Path) -> None:
+    icon = {"merged": "✅", "pr_open": "🔀", "local_only": "⚠️",
+            "skipped": "⏭"}.get(report["status"], "❓")
+    print(f"\n{icon}  git flow: {report['status']}"
+          + (f" → {report['pr_url']}" if report.get("pr_url") else ""))
+    print(f"   report: {project / 'artifacts' / 'scm_report.json'}")
+    for s in report.get("steps", []):
+        mark = "✓" if s["ok"] else "✗"
+        print(f"     {mark} {s['step']}" + ("" if s["ok"] else f"  ← {s['detail'][:80]}"))
+
+
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
     project = Path(args.project).resolve()
@@ -176,6 +196,18 @@ def main(argv=None) -> int:
               f"{t['duration_ms'] / 1000:.0f}s across {len(report['by_agent_role'])} roles")
         return 0
 
+    # Agent-driven Git flow on an already-complete project (standalone, no agents
+    # invoked) — mirrors --cost-report. The post-run hook below covers fresh runs.
+    if args.git_flow and not (args.prompt or args.feature or args.retry or args.retry_failed):
+        sf = project / "artifacts" / "workflow_state.json"
+        complete = sf.exists() and json.loads(sf.read_text()).get("current_stage") == "complete"
+        if complete:
+            from .scm import agent_git_flow
+            rep = agent_git_flow(project, REPO_ROOT, base=args.git_flow_base,
+                                 merge=not args.git_flow_no_merge)
+            _print_scm(rep, project)
+            return 0 if rep["status"] in ("merged", "pr_open", "skipped") else 1
+
     approvals = ALL_APPROVALS if args.yes else {
         a.strip() for a in args.approve.split(",") if a.strip()
     }
@@ -183,10 +215,14 @@ def main(argv=None) -> int:
     if args.replay:
         runner = ReplayRunner()
     else:
+        _mcp_cfg = REPO_ROOT / ".mcp.json"
         runner = ClaudeAgentRunner(
             permission_mode=args.permission_mode,
             add_dirs=[str(REPO_ROOT)],  # so agents can read schemas/ + SPEC.md
             model=args.model,
+            # repo .mcp.json carries the Playwright server the e2e-agent drives;
+            # the CLI runs with cwd=<project> (no .mcp.json there) so pass it through.
+            mcp_config=str(_mcp_cfg) if _mcp_cfg.exists() else None,
         )
 
     orch = Orchestrator(
@@ -256,6 +292,13 @@ def main(argv=None) -> int:
     else:
         _print_summary(state, project)
     stage = state.get("current_stage")
+
+    # Stretch: agent-driven Git flow once the pipeline is healthy.
+    if args.git_flow and stage == "complete":
+        from .scm import agent_git_flow
+        _print_scm(agent_git_flow(project, REPO_ROOT, base=args.git_flow_base,
+                                  merge=not args.git_flow_no_merge), project)
+
     return 0 if stage == "complete" else 1 if stage == "failed" else 2
 
 

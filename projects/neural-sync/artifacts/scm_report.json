@@ -1,0 +1,30 @@
+{
+  "project": "projects/neural-sync",
+  "branch": "agent/neural-sync-96fa0a8f",
+  "base": "agent-demo",
+  "pr_url": null,
+  "merged": false,
+  "status": "local_only",
+  "steps": [
+    {
+      "step": "branch",
+      "ok": true,
+      "detail": "Switched to a new branch 'agent/neural-sync-96fa0a8f'"
+    },
+    {
+      "step": "commit",
+      "ok": true,
+      "detail": "[agent/neural-sync-96fa0a8f 72cf269] feat(neural-sync): agent-built release 96fa0a8f"
+    },
+    {
+      "step": "push",
+      "ok": true,
+      "detail": "branch 'agent/neural-sync-96fa0a8f' set up to track 'origin/agent/neural-sync-96fa0a8f'.\nremote: \nremote: Create a pull request for 'agent/neural-sync-96fa0a8f' on GitHub by visiting:        \nremote:      https://github.com/Hadkevich/SDLC-fabric/pull/new/agent/neural-sync-96fa0a8f        \nremote: \nT"
+    },
+    {
+      "step": "pr_create",
+      "ok": false,
+      "detail": "pull request create failed: GraphQL: Resource not accessible by personal access token (createPullRequest)"
+    }
+  ]
+}

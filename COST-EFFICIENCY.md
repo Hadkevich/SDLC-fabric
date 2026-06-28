@@ -26,8 +26,9 @@ Generator: [`src/orchestrator/cost_reporter.py`](src/orchestrator/cost_reporter.
 schema: [`schemas/cost_report.schema.json`](schemas/cost_report.schema.json) · it reuses the
 event-log fold (same source of truth as the cost breaker) and resolves each role's model tier from
 `.claude/agents/*.agent.md` frontmatter. Roles whose work is mechanical/non-LLM (devops,
-orchestrator) or not exercised (e2e) are marked `coverage: none` with a clarifying note rather than
-read as a gap.
+orchestrator) are marked `coverage: none` with a clarifying note rather than read as a gap. The
+report now also folds the per-event **prompt-cache token breakdown** and a **measured parallelism**
+factor (see §7.4 below).
 
 **Recorded `neural-sync` run** ([`cost_report.md`](projects/neural-sync/artifacts/cost_report.md)):
 
@@ -46,6 +47,43 @@ read as a gap.
 The same per-event spend is also rendered live on the observability dashboard
 (`observability/dashboard.html`).
 
+> Cumulative figures grew after the recorded run as the factory extended itself: a brownfield
+> `--feature` ingestion build plus the **real browser `e2e_validation`** push the current report to
+> **$47.17 / 65.3M tok / 12916s across 9 roles** (e2e-agent now `coverage: full`).
+
+---
+
+## 7.4 — Prompt-cache savings & measured parallelism (stretch)
+
+Two stretch goals ("prompt caching with measured savings", "agents run in parallel, measurably
+faster") are now quantified **from the run's own event log** — no extra runs, no estimates.
+
+**Prompt-cache savings.** `engine._extract_metrics` preserves each event's
+`cache_read_input_tokens` / `cache_creation_input_tokens`; `cost_reporter._cache_savings_usd` prices
+the counterfactual at the role's model tier (input $/MTok from the `/claude-api` reference —
+opus $5, sonnet $3, haiku $1). A cached-read token bills at ~0.1× input (saves 0.9×); a 5-minute
+cache-write bills at ~1.25× (a 0.25× premium), so `savings = 0.9·read − 0.25·creation`, priced per
+model. The current run:
+
+| | tokens | |
+|---|--:|---|
+| prompt-cache **read** | 14.8M | billed at ~0.1× input |
+| prompt-cache **creation** | 0.20M | billed at ~1.25× input |
+| **measured savings** | | **≈ $39.8** |
+
+**Measured parallelism.** `cost_reporter.compute_parallelism` reconstructs each task's
+`[start, end]` interval (`start ≈ timestamp − duration_ms`) and takes the **interval-union** per
+stage (so re-runs and rework rounds separated by idle gaps count as serial, never *slower* than
+serial). The run:
+
+| Scope | Agent-time | Wall-clock | Speedup |
+|---|--:|--:|--:|
+| **overall** | 12916s | 11729s | **1.10×** |
+| planning_architecture wave (api-contracts ∥ data-model) | 2902s | 2182s | **1.33×** |
+| code_generation wave | 3508s | 3041s | 1.15× |
+
+Both land in `cost_report.{json,md}` automatically on every run.
+
 ---
 
 ## 7.2 — Different models per role (routing enforced in code)
@@ -58,7 +96,7 @@ in `SPEC.md §4`.
 |---|---|---|
 | architect, reviewer | **opus** (frontier) | hardest reasoning; reviewer is deliberately a *stronger, different* model than the developer to break the echo chamber |
 | developer, planner, product, qa, e2e, orchestrator | **sonnet** (mid) | standard generation / structured work |
-| devops | **haiku** (small/fast) | mechanical deploy + log/format work |
+| devops, scm | **haiku** (small/fast) | mechanical deploy + git/PR + log/format work |
 
 This matches the scorecard's routing guide (Architect/complex → large; Developer → mid; simple →
 small) and the recorded report above confirms the spend follows the tiers (opus roles dominate cost,

@@ -1,6 +1,6 @@
 {
   "workflow_id": "96fa0a8f-a908-4773-9363-15c3fc120443",
-  "report_generated_at": "2026-06-28T04:00:22.052983+00:00",
+  "report_generated_at": "2026-06-28T06:56:24.293964+00:00",
   "by_agent_role": {
     "developer-agent": {
       "model": "sonnet",
@@ -8,6 +8,9 @@
       "input_tokens": 24469753,
       "output_tokens": 198601,
       "total_tokens": 24668354,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_savings_usd": 0.0,
       "total_duration_ms": 3508305.0,
       "event_count": 6,
       "events_with_metrics": 5,
@@ -19,6 +22,9 @@
       "input_tokens": 2670813,
       "output_tokens": 224413,
       "total_tokens": 2895226,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_savings_usd": 0.0,
       "total_duration_ms": 2902122.0,
       "event_count": 4,
       "events_with_metrics": 4,
@@ -30,10 +36,27 @@
       "input_tokens": 6522741,
       "output_tokens": 78419,
       "total_tokens": 6601160,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_savings_usd": 0.0,
       "total_duration_ms": 1557731.0,
       "event_count": 8,
       "events_with_metrics": 4,
       "coverage": "partial"
+    },
+    "e2e-agent": {
+      "model": "sonnet",
+      "total_cost_usd": 7.470938,
+      "input_tokens": 15648279,
+      "output_tokens": 67291,
+      "total_tokens": 15715570,
+      "cache_read_input_tokens": 14803659,
+      "cache_creation_input_tokens": 195217,
+      "cache_savings_usd": 39.823467,
+      "total_duration_ms": 1790586.0,
+      "event_count": 2,
+      "events_with_metrics": 2,
+      "coverage": "full"
     },
     "qa-agent": {
       "model": "sonnet",
@@ -41,6 +64,9 @@
       "input_tokens": 9462975,
       "output_tokens": 61585,
       "total_tokens": 9524560,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_savings_usd": 0.0,
       "total_duration_ms": 1290298.0,
       "event_count": 4,
       "events_with_metrics": 2,
@@ -52,6 +78,9 @@
       "input_tokens": 950027,
       "output_tokens": 35407,
       "total_tokens": 985434,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_savings_usd": 0.0,
       "total_duration_ms": 831585.0,
       "event_count": 2,
       "events_with_metrics": 2,
@@ -63,20 +92,12 @@
       "input_tokens": 215851,
       "output_tokens": 38747,
       "total_tokens": 254598,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_savings_usd": 0.0,
       "total_duration_ms": 752009.0,
       "event_count": 2,
       "events_with_metrics": 2,
-      "coverage": "full"
-    },
-    "e2e-agent": {
-      "model": "sonnet",
-      "total_cost_usd": 0.957091,
-      "input_tokens": 649247,
-      "output_tokens": 17936,
-      "total_tokens": 667183,
-      "total_duration_ms": 345631.0,
-      "event_count": 1,
-      "events_with_metrics": 1,
       "coverage": "full"
     },
     "devops-agent": {
@@ -85,6 +106,9 @@
       "input_tokens": 4654435,
       "output_tokens": 20957,
       "total_tokens": 4675392,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_savings_usd": 0.0,
       "total_duration_ms": 283497.0,
       "event_count": 5,
       "events_with_metrics": 1,
@@ -96,21 +120,48 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "total_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_savings_usd": 0.0,
       "total_duration_ms": 0.0,
-      "event_count": 7,
+      "event_count": 8,
       "events_with_metrics": 0,
       "coverage": "none"
     }
   },
   "totals": {
-    "cost_usd": 40.660159,
-    "input_tokens": 49595842,
-    "output_tokens": 676065,
-    "total_tokens": 50271907,
-    "duration_ms": 11471178.0,
-    "event_count": 39
+    "cost_usd": 47.174005,
+    "input_tokens": 64594874,
+    "output_tokens": 725420,
+    "total_tokens": 65320294,
+    "cache_read_input_tokens": 14803659,
+    "cache_creation_input_tokens": 195217,
+    "cache_savings_usd": 39.823467,
+    "duration_ms": 12916133.0,
+    "event_count": 41
   },
   "notes": [
     "orchestrator-agent: monitoring_feedback is orchestration logic \u2014 no LLM call"
-  ]
+  ],
+  "parallelism": {
+    "serial_agent_ms": 12916133.0,
+    "wallclock_ms": 11728611.0,
+    "speedup": 1.101,
+    "waves": [
+      {
+        "stage": "planning_architecture",
+        "tasks": 4,
+        "serial_agent_ms": 2902122.0,
+        "wallclock_ms": 2182368.0,
+        "speedup": 1.33
+      },
+      {
+        "stage": "code_generation",
+        "tasks": 5,
+        "serial_agent_ms": 3508305.0,
+        "wallclock_ms": 3040537.0,
+        "speedup": 1.154
+      }
+    ]
+  }
 }
