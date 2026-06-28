@@ -4,9 +4,9 @@ Honest, file-level mapping of each Task04 requirement to its implementation stat
 compliance pass. Status: ✅ done · 🟡 partial / pragmatic · ⚠️ deliberate deviation (documented)
 · ❌ not done.
 
-> Verification baseline: `docker exec neural-sync-backend-1 pytest` → **243/243 passing, 0 failed**; pgvector
-> ANN verified live; risk-refresh / admin overrides / ingestion verified live against the running
-> container.
+> Verification baseline: `docker exec neural-sync-backend-1 pytest` → **247/247 passing, 0 failed**; pgvector
+> ANN verified live; risk-refresh / admin overrides / ingestion / project CRUD verified live against
+> the running container.
 
 ---
 
@@ -35,6 +35,10 @@ compliance pass. Status: ✅ done · 🟡 partial / pragmatic · ⚠️ delibera
 - **3.1 Profile Enrichment** ✅ — `services/enrichment.py` (LLM + heuristic fallback), now fed by
   real **source connectors** (§5).
 - **3.2 Recommendation generation** ✅ "why this match" (LLM) · 🟡 transitions/career hints (deterministic).
+- **3.2 / §11 Cyberpunk prompt directive** ✅ — the `match_explanation` system prompt now opens with
+  "workforce optimization AI in a cyberpunk setting … prioritize long-term engagement, not short-term
+  efficiency" (`artifacts/prompts/match_explanation_v1.json`), while keeping the "EXACTLY three
+  sections" output contract. No test pins the wording; placeholders/sections unchanged.
 
 ## §4 Real-Time Optimization Engine
 - **4.1 Bench / 4.2 Burnout** ✅. **4.3 Reallocation** ✅ (`/reallocation-suggestion`).
@@ -56,15 +60,17 @@ compliance pass. Status: ✅ done · 🟡 partial / pragmatic · ⚠️ delibera
 | View | Role | Capabilities (and the gate) |
 |---|---|---|
 | **Developer View** | `developer` | Recommended projects, match explanations, growth paths, accept/reject — own data only |
-| **Manager View** | `manager` (+admin) | Team composition health + risk alerts (`/teams/{id}/risk-summary`, Team-Fit), allocation **suggestions** (`/reallocation-suggestion`), Roster (paginated/filterable for 10k), team analytics, projects catalog |
-| **Admin View** | `admin` only | **Weight tuning** (`PUT /config/weights`), **system overrides** (`/admin/allocations` CRUD), re-optimization triggers (`rescore`/`reembed`/`risk/refresh`), GDPR erasure-audit |
+| **Manager View** | `manager` (+admin) | Team composition health + risk alerts (`/teams/{id}/risk-summary`, Team-Fit), allocation **suggestions** (`/reallocation-suggestion`), Roster (paginated/filterable for 10k), team analytics |
+| **Admin View** | `admin` only | **Weight tuning** (`PUT /config/weights`), **system overrides** (`/admin/allocations` CRUD), **Project Genome management** (`GET/POST/PUT/DELETE /projects`, Projects tab), re-optimization triggers (`rescore`/`reembed`/`risk/refresh`), GDPR erasure-audit |
 
-`admin` is a **superset** of `manager` (also sees team health); the Admin-exclusive capabilities
-(weight tuning + system overrides) return **403 for managers** — exactly matching the spec, where
-weight tuning and system overrides are the *Admin* View, not the Manager View. Frontend: the Weight
-Config tab renders only for `admin`; the role chip shows 🛡 Admin vs ⚙ Manager. Gates:
-`require_admin` / `require_admin_or_manager` in `core/auth.py`. (Ingestion §5 is not a §6 view —
-allowed for manager+admin.)
+`admin` is a **superset** of `manager` (also sees team health), but the frontend now renders the
+Admin-exclusive tools in a **visually separated "Admin" group** (after a divider) that does **not
+render at all** for managers — not just a hidden button. Admin-exclusive capabilities (weight tuning,
+system overrides, project create) return **403 for managers** on the backend too — matching the spec,
+where weight tuning and system overrides are the *Admin* View, not the Manager View. The role chip
+shows 🛡 Admin vs ⚙ Manager. Gates: `require_admin` / `require_admin_or_manager` in `core/auth.py`,
+plus the inline manager+admin gate on `/projects`. (Ingestion §5 is not a §6 view — allowed for
+manager+admin.)
 
 ## §7 Tech Stack
 - Backend FastAPI/Python ✅ · Frontend React/TS ✅ · AI ⚠️ Gemini (see §3) ·

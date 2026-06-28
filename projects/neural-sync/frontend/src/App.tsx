@@ -21,11 +21,12 @@ import { login, logout, setAccessToken } from './api/client';
 import { DeveloperDashboard } from './pages/DeveloperDashboard';
 import { IngestionPage } from './pages/IngestionPage';
 import { ManagerDashboard } from './pages/ManagerDashboard';
+import { ProjectsPage } from './pages/ProjectsPage';
 import { RosterPage } from './pages/RosterPage';
 import { WeightConfigPage } from './pages/WeightConfigPage';
 import { ProfilePage } from './pages/ProfilePage';
 
-type ManagerTab = 'risk' | 'roster' | 'weights' | 'profile' | 'ingestion';
+type ManagerTab = 'risk' | 'roster' | 'weights' | 'projects' | 'profile' | 'ingestion';
 type DeveloperTab = 'recommendations' | 'profile';
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
@@ -270,6 +271,7 @@ export default function App() {
           NEURAL SYNC
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* ── Manager capabilities (visible to manager + admin) ── */}
           <button onClick={() => setManagerTab('risk')} style={tabBtnStyle(managerTab === 'risk')}>
             Team Risk
           </button>
@@ -280,11 +282,6 @@ export default function App() {
           >
             Roster
           </button>
-          {session.role === 'admin' && (
-            <button onClick={() => setManagerTab('weights')} style={tabBtnStyle(managerTab === 'weights')}>
-              Weight Config
-            </button>
-          )}
           <button
             data-testid="ingestion-tab-button"
             onClick={() => setManagerTab('ingestion')}
@@ -295,6 +292,38 @@ export default function App() {
           <button onClick={() => setManagerTab('profile')} style={tabBtnStyle(managerTab === 'profile')}>
             My Profile
           </button>
+
+          {/* ── Admin-only group (Weight tuning + system controls) — §6 Admin View ── */}
+          {session.role === 'admin' && (
+            <>
+              <span
+                aria-hidden
+                style={{ width: '1px', height: '20px', backgroundColor: '#3b82f6', margin: '0 4px' }}
+              />
+              <span
+                style={{
+                  color: '#bfdbfe',
+                  fontSize: '0.7rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.05em',
+                  textTransform: 'uppercase',
+                }}
+              >
+                Admin
+              </span>
+              <button onClick={() => setManagerTab('weights')} style={tabBtnStyle(managerTab === 'weights')}>
+                Weight Config
+              </button>
+              <button
+                data-testid="projects-tab-button"
+                onClick={() => setManagerTab('projects')}
+                style={tabBtnStyle(managerTab === 'projects')}
+              >
+                Projects
+              </button>
+            </>
+          )}
+
           <span style={{ color: '#93c5fd', fontSize: '0.8rem', fontWeight: 600, marginLeft: '8px' }}>
             {session.role === 'admin' ? '🛡 Admin' : '⚙ Manager'}
           </span>
@@ -319,6 +348,7 @@ export default function App() {
       {managerTab === 'risk' && <ManagerDashboard teamId={teamId} />}
       {managerTab === 'roster' && <RosterPage />}
       {managerTab === 'weights' && session.role === 'admin' && <WeightConfigPage />}
+      {managerTab === 'projects' && session.role === 'admin' && <ProjectsPage />}
       {managerTab === 'ingestion' && <IngestionPage />}
       {managerTab === 'profile' && <ProfilePage role="manager" userId={session.user_id} />}
     </div>

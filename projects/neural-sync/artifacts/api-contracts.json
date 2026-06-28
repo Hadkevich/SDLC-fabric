@@ -523,6 +523,34 @@
       }
     },
     "/projects": {
+      "get": {
+        "tags": ["projects"],
+        "summary": "List project profiles",
+        "description": "Returns project profiles ordered by creation time (newest first). Supports limit (1–500, default 100) and offset paging. Manager or admin role required. No embedding vectors are returned.",
+        "operationId": "listProjects",
+        "parameters": [
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 100, "minimum": 1, "maximum": 500 } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "default": 0, "minimum": 0 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of project profiles",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ProjectProfile" } }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "403": {
+            "description": "Forbidden — manager or admin role required",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      },
       "post": {
         "tags": ["projects"],
         "summary": "Ingest a new project profile",

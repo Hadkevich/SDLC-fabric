@@ -119,6 +119,31 @@ async def create_project(
     return _to_response(proj)
 
 
+@router.get("", response_model=list[ProjectProfileResponse])
+async def list_projects(
+    limit: int = 100,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+) -> list[ProjectProfileResponse]:
+    """List project profiles (manager/admin). Used by the Admin project manager
+    and as the source for project pickers. Read-only; no vectors exposed."""
+    if current_user.role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Manager role required to list projects")
+
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    rows = (
+        await db.execute(
+            select(ProjectProfile)
+            .order_by(ProjectProfile.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    ).scalars().all()
+    return [_to_response(p) for p in rows]
+
+
 @router.get("/{project_id}", response_model=ProjectProfileResponse)
 async def get_project(
     project_id: uuid.UUID,

@@ -467,6 +467,49 @@ export async function getReallocationSuggestion(developerId: string): Promise<Re
   return request<ReallocationSuggestion>(`/developers/${developerId}/reallocation-suggestion`);
 }
 
+// ─── Projects (Admin View — Project Genome §2.2) ──────────────────────────────
+
+/** ProjectProfile as returned by the API (no vectors). */
+export interface ProjectProfile {
+  id: string;
+  name: string;
+  required_skills: string[];
+  team_structure: unknown; // string or object per spec
+  workload_intensity: number;
+  innovation_level: number;
+  timezone_overlap_required: string;
+  duration_weeks: number;
+  growth_opportunities: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+/** Payload for creating a project (POST /projects). */
+export interface ProjectCreate {
+  name?: string;
+  required_skills: string[];
+  team_structure: unknown;
+  workload_intensity: number;
+  innovation_level: number;
+  timezone_overlap_required: string;
+  duration_weeks: number;
+  growth_opportunities: string[];
+}
+
+/** GET /projects — list project profiles (manager/admin). */
+export async function listProjects(limit = 100, offset = 0): Promise<ProjectProfile[]> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return request<ProjectProfile[]>(`/projects?${params.toString()}`);
+}
+
+/** POST /projects — create a project profile (manager/admin). */
+export async function createProject(payload: ProjectCreate): Promise<ProjectProfile> {
+  return request<ProjectProfile>('/projects', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 // ─── Ingestion types (AC26, AC29) ─────────────────────────────────────────────
 
 /** ConnectorInfo descriptor returned by GET /ingestion/connectors. */
