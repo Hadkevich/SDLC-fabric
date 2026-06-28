@@ -280,6 +280,12 @@ class Orchestrator:
             "total_tokens": in_total + out_total,
             "cost_usd": cost,
             "duration_ms": dur,
+            # Keep the cache breakdown so the cost report can compute prompt-cache
+            # savings (scorecard §7 / stretch). cache_read bills at ~0.1x input,
+            # cache_creation at ~1.25x input — both are folded into input_tokens
+            # above for the spend rollup, but the split is needed for the savings calc.
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_create,
         }
 
     def _ensure_task_states(self, state, tasks) -> None:

@@ -13,6 +13,7 @@ import jsonschema
 from orchestrator.cost_reporter import (
     agent_model_map,
     build_cost_report,
+    compute_parallelism,
     fold_events_by_agent,
     render_markdown,
     write_cost_report,
@@ -125,6 +126,70 @@ def test_malformed_metric_value_does_not_crash(tmp_path):
     assert r["output_tokens"] == 5
     assert r["cost_usd"] == 0.0        # "n/a" → 0.0
     assert r["events_with_metrics"] == 1
+
+
+def test_cache_savings_computed_per_model(tmp_path):
+    """cache_read tokens save ~0.9x input price; the role's model sets the rate."""
+    # sonnet input = $3/MTok. 1,000,000 cache-read tok, no writes →
+    # savings = 1e6 * 0.9 * (3/1e6) = $2.70
+    proj = _write_events(tmp_path, [
+        _event("developer-agent", metrics={
+            "input_tokens": 1_000_000, "output_tokens": 10, "total_tokens": 1_000_010,
+            "cost_usd": 0.30, "duration_ms": 1000,
+            "cache_read_input_tokens": 1_000_000, "cache_creation_input_tokens": 0,
+        }),
+    ])
+    agents = tmp_path / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "developer.agent.md").write_text("---\nmodel: sonnet\n---\n")
+    rep = build_cost_report(proj, repo_root=tmp_path)
+    role = rep["by_agent_role"]["developer-agent"]
+    assert role["cache_read_input_tokens"] == 1_000_000
+    assert abs(role["cache_savings_usd"] - 2.70) < 1e-6
+    assert abs(rep["totals"]["cache_savings_usd"] - 2.70) < 1e-6
+    # write premium reduces savings: 1M reads + 1M writes → 0.9*3 - 0.25*3 = $1.95
+    assert "prompt cache" in render_markdown(rep)
+
+
+def test_cache_savings_zero_without_known_model(tmp_path):
+    proj = _write_events(tmp_path, [
+        _event("mystery-agent", metrics={
+            "input_tokens": 100, "output_tokens": 5, "total_tokens": 105,
+            "cost_usd": 0.1, "duration_ms": 10, "cache_read_input_tokens": 5000,
+        }),
+    ])
+    rep = build_cost_report(proj, repo_root=tmp_path)  # no agent .md → no model
+    assert rep["by_agent_role"]["mystery-agent"]["cache_savings_usd"] == 0.0
+
+
+def test_parallelism_detects_overlapping_tasks(tmp_path):
+    """Two tasks in one stage that overlap in time → speedup > 1."""
+    # Both ran ~10s; T-02 ends at :12, T-03 ends at :13 → starts at :02 and :03.
+    # span = 13 - 2 = 11s; serial = 20s; speedup ≈ 1.8x.
+    proj = _write_events(tmp_path, [
+        {"event_id": "1", "workflow_id": "wf", "stage": "planning_architecture",
+         "agent": "architect-agent", "status": "success",
+         "timestamp": "2026-06-28T00:00:12Z",
+         "metrics": {"duration_ms": 10000, "cost_usd": 1.0}},
+        {"event_id": "2", "workflow_id": "wf", "stage": "planning_architecture",
+         "agent": "architect-agent", "status": "success",
+         "timestamp": "2026-06-28T00:00:13Z",
+         "metrics": {"duration_ms": 10000, "cost_usd": 1.0}},
+    ])
+    par = compute_parallelism(proj / "artifacts" / "events.log.jsonl")
+    assert par is not None
+    assert par["serial_agent_ms"] == 20000
+    assert par["wallclock_ms"] == 11000
+    assert par["speedup"] > 1.5
+    assert par["waves"][0]["stage"] == "planning_architecture"
+    rep = build_cost_report(proj, repo_root=tmp_path)
+    assert rep["parallelism"]["speedup"] > 1.5
+    assert "parallelism" in render_markdown(rep)
+
+
+def test_parallelism_none_without_timed_events(tmp_path):
+    proj = _write_events(tmp_path, [_event("developer-agent")])  # no metrics
+    assert compute_parallelism(proj / "artifacts" / "events.log.jsonl") is None
 
 
 def test_empty_log_is_safe(tmp_path):

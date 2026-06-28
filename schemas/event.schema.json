@@ -68,7 +68,9 @@
                 "output_tokens": { "type": "integer", "minimum": 0 },
                 "total_tokens": { "type": "integer", "minimum": 0 },
                 "cost_usd": { "type": "number", "minimum": 0 },
-                "duration_ms": { "type": "number", "minimum": 0 }
+                "duration_ms": { "type": "number", "minimum": 0 },
+                "cache_read_input_tokens": { "type": "integer", "minimum": 0 },
+                "cache_creation_input_tokens": { "type": "integer", "minimum": 0 }
             }
         }
     },
