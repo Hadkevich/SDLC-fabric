@@ -21,10 +21,11 @@ import { login, logout, setAccessToken } from './api/client';
 import { DeveloperDashboard } from './pages/DeveloperDashboard';
 import { IngestionPage } from './pages/IngestionPage';
 import { ManagerDashboard } from './pages/ManagerDashboard';
+import { RosterPage } from './pages/RosterPage';
 import { WeightConfigPage } from './pages/WeightConfigPage';
 import { ProfilePage } from './pages/ProfilePage';
 
-type ManagerTab = 'risk' | 'weights' | 'profile' | 'ingestion';
+type ManagerTab = 'risk' | 'roster' | 'weights' | 'profile' | 'ingestion';
 type DeveloperTab = 'recommendations' | 'profile';
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
@@ -272,6 +273,13 @@ export default function App() {
           <button onClick={() => setManagerTab('risk')} style={tabBtnStyle(managerTab === 'risk')}>
             Team Risk
           </button>
+          <button
+            data-testid="roster-tab-button"
+            onClick={() => setManagerTab('roster')}
+            style={tabBtnStyle(managerTab === 'roster')}
+          >
+            Roster
+          </button>
           <button onClick={() => setManagerTab('weights')} style={tabBtnStyle(managerTab === 'weights')}>
             Weight Config
           </button>
@@ -286,7 +294,7 @@ export default function App() {
             My Profile
           </button>
           <span style={{ color: '#93c5fd', fontSize: '0.8rem', fontWeight: 600, marginLeft: '8px' }}>
-            ⚙ Manager
+            {session.role === 'admin' ? '🛡 Admin' : '⚙ Manager'}
           </span>
           <button
             onClick={() => void handleLogout()}
@@ -307,6 +315,7 @@ export default function App() {
       </nav>
 
       {managerTab === 'risk' && <ManagerDashboard teamId={teamId} />}
+      {managerTab === 'roster' && <RosterPage />}
       {managerTab === 'weights' && <WeightConfigPage />}
       {managerTab === 'ingestion' && <IngestionPage />}
       {managerTab === 'profile' && <ProfilePage role="manager" userId={session.user_id} />}

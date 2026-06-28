@@ -42,7 +42,7 @@ export interface LoginResponse {
   token_type: 'bearer';
   expires_in: number;
   user_id: string;
-  role: 'developer' | 'manager';
+  role: 'developer' | 'manager' | 'admin';
   developer_profile_id: string | null;
 }
 
@@ -351,6 +351,47 @@ export async function getDeveloperMatches(
   return request<DeveloperMatchesResponse>(
     `/developers/${developerId}/matches?${params.toString()}`,
   );
+}
+
+// ─── Developer roster (WS-B5) ───────────────────────────────────────────────────
+
+export interface DeveloperListItem {
+  developer_id: string;
+  display_name: string | null;
+  skills: string[];
+  experience_years: number;
+  timezone: string;
+  availability_hours: number;
+  embedding_status: string;
+  burnout_risk_badge: RiskBadgeLevel | null;
+  bench_risk_badge: RiskBadgeLevel | null;
+}
+
+export interface DeveloperListResponse {
+  items: DeveloperListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  next_offset: number | null;
+}
+
+export interface RosterQuery {
+  limit?: number;
+  offset?: number;
+  skill?: string;
+  timezone?: string;
+  risk_badge?: string;
+  search?: string;
+}
+
+/** GET /developers — paginated, filterable roster (manager/admin). */
+export async function listDevelopers(q: RosterQuery = {}): Promise<DeveloperListResponse> {
+  const params = new URLSearchParams();
+  Object.entries(q).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && String(v).length > 0) params.set(k, String(v));
+  });
+  const qs = params.toString();
+  return request<DeveloperListResponse>(`/developers${qs ? `?${qs}` : ''}`);
 }
 
 // ─── Explanation polling ───────────────────────────────────────────────────────
